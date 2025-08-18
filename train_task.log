@@ -1,0 +1,27 @@
+[2025-08-18 20:34:15,683][__main__][INFO] - Instantiating wandb ...
+[2025-08-18 20:34:23,420][tactile_ssl.utils.logging][WARNING] - Field 'model' not found in config. Skipping 'model' config printing...
+[2025-08-18 20:34:24,794][__main__][INFO] - Instantiating dataset & dataloaders for <tactile_ssl.data.d360_tactile.D360SSLDataset>
+[2025-08-18 20:34:25,087][tactile_ssl.data.d360.d360][INFO] - Loading /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/0-golf_ball-circular-fabric
+[2025-08-18 20:34:33,656][tactile_ssl.data.d360.d360][INFO] - Loaded /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/0-golf_ball-circular-fabric
+[2025-08-18 20:34:34,029][tactile_ssl.data.d360.d360][INFO] - Loading /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/1-golf_ball-circular-fabric
+[2025-08-18 20:34:41,697][tactile_ssl.data.d360.d360][INFO] - Loaded /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/1-golf_ball-circular-fabric
+[2025-08-18 20:34:42,045][tactile_ssl.data.d360.d360][INFO] - Loading /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/3-golf_ball-circular-form
+[2025-08-18 20:34:50,182][tactile_ssl.data.d360.d360][INFO] - Loaded /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/3-golf_ball-circular-form
+[2025-08-18 20:34:50,514][tactile_ssl.data.d360.d360][INFO] - Loading /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/4-golf_ball-circular-form
+[2025-08-18 20:34:58,009][tactile_ssl.data.d360.d360][INFO] - Loaded /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/4-golf_ball-circular-form
+[2025-08-18 20:34:58,370][tactile_ssl.data.d360.d360][INFO] - Loading /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/6-golf_ball-circular-grass
+[2025-08-18 20:35:05,820][tactile_ssl.data.d360.d360][INFO] - Loaded /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/6-golf_ball-circular-grass
+[2025-08-18 20:35:06,152][tactile_ssl.data.d360.d360][INFO] - Loading /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/7-golf_ball-circular-grass
+[2025-08-18 20:36:54,090][__main__][INFO] - Instantiating wandb ...
+[2025-08-18 20:37:03,060][tactile_ssl.utils.logging][WARNING] - Field 'model' not found in config. Skipping 'model' config printing...
+[2025-08-18 20:37:04,746][__main__][INFO] - Instantiating dataset & dataloaders for <tactile_ssl.data.d360_tactile.D360SSLDataset>
+[2025-08-18 20:37:04,954][tactile_ssl.data.d360.d360][INFO] - Loading /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/0-golf_ball-circular-fabric
+[2025-08-18 20:37:12,957][tactile_ssl.data.d360.d360][INFO] - Loaded /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/0-golf_ball-circular-fabric
+[2025-08-18 20:37:13,277][tactile_ssl.data.d360.d360][INFO] - Loading /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/1-golf_ball-circular-fabric
+[2025-08-18 20:37:20,875][tactile_ssl.data.d360.d360][INFO] - Loaded /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/1-golf_ball-circular-fabric
+[2025-08-18 20:37:21,174][tactile_ssl.data.d360.d360][INFO] - Loading /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/2-golf_ball-circular-fabric
+[2025-08-18 20:37:28,086][tactile_ssl.data.d360.d360][INFO] - Loaded /fsx-gum/shared/datasets/d360/ssl/d360/20241126-fre-trash_picker/0-golf_ball/seqs/2-golf_ball-circular-fabric
+[2025-08-18 20:37:30,284][__main__][INFO] - Instantiating model <tactile_ssl.downstream_task.D360ClassificationSLModule>
+[2025-08-18 20:37:31,236][tactile_ssl.model.multimodal_transformer][INFO] - using MLP layer as FFN
+[2025-08-18 20:37:40,518][tactile_ssl.downstream_task.sl_module][INFO] - No checkpoint provided. Training from scratch.
+[2025-08-18 20:37:41,748][tactile_ssl.downstream_task.sl_module][INFO] - Total parameters: 348787969, Decay parameters: 348212736, Nodecay parameters: 575233

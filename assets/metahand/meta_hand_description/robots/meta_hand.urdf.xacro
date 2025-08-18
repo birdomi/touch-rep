@@ -1,0 +1,345 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="meta_hand">
+
+<!-- Adapted from https://github.com/simlabrobotics/allegro_hand_ros/blob/master/allegro_hand_description/allegro_hand_description_left.xacro -->
+<xacro:property name="DEG2RAD" value="0.01745329251" />
+
+<!-- ======================== BASE PARAMS ========================= -->
+<xacro:property name="base_link_z" value="0.095" />
+
+<!-- ======================== FINGER PARAMS ======================== -->
+<xacro:property name="offset_origin_x_const" value="0" />
+<xacro:property name="offset_origin_y_const" value="0.0435" /> <!--0.0435,   0.044981-->
+<xacro:property name="offset_origin_z_const" value="-0.001542" /> <!--0.002298-->
+<xacro:property name="offset_origin_z_mid_const" value="0.0007" /> <!--0.002298-->
+
+<xacro:include filename="allegro_hand.urdf.xacro" />
+
+<!-- ============================================================================= -->
+<!-- ============================================================================= -->
+<!-- ============================================================================= -->
+<xacro:arg name="asset_prefix" default="package://meta_hand_description" />
+<xacro:arg name="side" default="left"/>
+<xacro:arg name="fingertip" default="base" />
+<xacro:arg name="sphere_fingertip_coll" default="false" />
+<xacro:arg name="adjust_fingertip" default="false" />
+
+<xacro:property name="asset_prefix" value="$(arg asset_prefix)" />
+<xacro:property name="side" value="$(arg side)" />
+<xacro:property name="fingertip" value="$(arg fingertip)" />
+<xacro:property name="sphere_fingertip_coll" value="$(arg sphere_fingertip_coll)" />
+<xacro:property name="adjust_fingertip" value="$(arg adjust_fingertip)" />
+
+<xacro:if value="${side == 'left'}">
+	<xacro:property name="base_mesh" value="${asset_prefix}/meshes/base_link_left.STL" />
+	<xacro:property name="base_roll" value="${-90*DEG2RAD}" />
+	<xacro:property name="finger0_y" value="${-1*offset_origin_y_const}" />
+	<xacro:property name="finger0_roll" value="${5*DEG2RAD}" />
+	<xacro:property name="finger2_y" value="${offset_origin_y_const}" />
+	<xacro:property name="finger2_roll" value="${-5*DEG2RAD}" />
+	<xacro:property name="thumb_y" value="-0.019333" />
+	<xacro:property name="thumb_yaw" value="${90*DEG2RAD}" />
+	<xacro:if value="${fingertip == 'digitv1'}">
+        <xacro:property name="fingertip0_yaw" value="${90*DEG2RAD}" />
+        <xacro:property name="fingertip1_yaw" value="0" />
+        <xacro:property name="fingertip2_yaw" value="${-90*DEG2RAD}" />
+        <xacro:property name="fingertip3_yaw" value="${60*DEG2RAD}" />
+    </xacro:if>
+	<xacro:unless value="${fingertip == 'digitv1'}">
+        <xacro:property name="fingertip0_yaw" value="0" />
+        <xacro:property name="fingertip1_yaw" value="0" />
+        <xacro:property name="fingertip2_yaw" value="0" />
+        <xacro:property name="fingertip3_yaw" value="0" />
+    </xacro:unless>
+	<xacro:if value="${adjust_fingertip}">
+        <xacro:property name="fingertip0_roll" value="${90*DEG2RAD}" />
+        <xacro:property name="fingertip1_roll" value="${90*DEG2RAD}" />
+        <xacro:property name="fingertip2_roll" value="${90*DEG2RAD}" />
+        <xacro:property name="fingertip3_roll" value="${90*DEG2RAD}" />
+    </xacro:if>
+	<xacro:unless value="${adjust_fingertip}">
+        <xacro:property name="fingertip0_roll" value="0" />
+        <xacro:property name="fingertip1_roll" value="0" />
+        <xacro:property name="fingertip2_roll" value="0" />
+        <xacro:property name="fingertip3_roll" value="0" />
+    </xacro:unless>
+</xacro:if>
+<xacro:unless value="${side == 'left'}">
+	<xacro:property name="base_mesh" value="${asset_prefix}/meshes/base_link.STL" />
+	<xacro:property name="base_roll" value="0" />
+	<xacro:property name="finger0_y" value="${offset_origin_y_const}" />
+	<xacro:property name="finger0_roll" value="${-5*DEG2RAD}" />
+	<xacro:property name="finger2_y" value="${-1*offset_origin_y_const}" />
+	<xacro:property name="finger2_roll" value="${5*DEG2RAD}" />
+	<xacro:property name="thumb_y" value="0.019333" />
+	<xacro:property name="thumb_yaw" value="${-90*DEG2RAD}" />
+	<xacro:if value="${fingertip == 'digitv1'}">
+        <xacro:property name="fingertip0_yaw" value="${-90*DEG2RAD}" />
+        <xacro:property name="fingertip1_yaw" value="0" />
+        <xacro:property name="fingertip2_yaw" value="${90*DEG2RAD}" />
+        <xacro:property name="fingertip3_yaw" value="${-60*DEG2RAD}" />
+    </xacro:if>
+	<xacro:unless value="${fingertip == 'digitv1'}">
+        <xacro:property name="fingertip0_yaw" value="0" />
+        <xacro:property name="fingertip1_yaw" value="0" />
+        <xacro:property name="fingertip2_yaw" value="0" />
+        <xacro:property name="fingertip3_yaw" value="0" />
+    </xacro:unless>
+	<xacro:if value="${adjust_fingertip}">
+        <xacro:property name="fingertip0_roll" value="${90*DEG2RAD}" />
+        <xacro:property name="fingertip1_roll" value="${90*DEG2RAD}" />
+        <xacro:property name="fingertip2_roll" value="${90*DEG2RAD}" />
+        <xacro:property name="fingertip3_roll" value="${90*DEG2RAD}" />
+    </xacro:if>
+	<xacro:unless value="${adjust_fingertip}">
+        <xacro:property name="fingertip0_roll" value="0" />
+        <xacro:property name="fingertip1_roll" value="0" />
+        <xacro:property name="fingertip2_roll" value="0" />
+        <xacro:property name="fingertip3_roll" value="0" />
+    </xacro:unless>
+</xacro:unless>
+
+<xacro:macro name="meta_thumb" params="side asset_prefix fingertip sphere_fingertip_coll thumb_y thumb_yaw thumb_fingertip_roll thumb_fingertip_yaw" >
+
+    <xacro:property name="reskin_joint_x" value="0.0118" />
+    <xacro:property name="reskin_joint_y" value="0.009" />
+    <xacro:property name="reskin_joint_z" value="0.022" />
+
+    <xacro:thumb
+        side=                   "${side}"
+        asset_prefix=           "${asset_prefix}"
+        finger_num=			    "3"
+        fingertip=			    "${fingertip}"
+        sphere_fingertip_coll=  "${sphere_fingertip_coll}"
+        offset_origin_x=	    "-0.0182"
+        offset_origin_y=	    "${thumb_y}"
+        offset_origin_z=	    "-0.045987"
+        finger_angle_r=		    "0"
+        finger_angle_p=		    "-${95*DEG2RAD}"
+        finger_angle_y=		    "${thumb_yaw}"
+        fingertip_angle_r=      "${thumb_fingertip_roll}"
+        fingertip_angle_y=      "${thumb_fingertip_yaw}"
+    />
+
+	<link name="reskin_link_${3*4+2}.0">
+    	<visual>
+      		<geometry>
+                <mesh filename="${asset_prefix}/meshes/reskin_finger_pad.stl" scale="0.001 0.001 0.002"/>
+        	</geometry>
+            <origin rpy="${-90*DEG2RAD} 0 ${-90*DEG2RAD}" xyz="0 0 0"/>
+            <material name="grey">
+                <color rgba="0.4 0.4 0.4 1"/>
+            </material>
+    	</visual>
+	</link>
+
+    <joint name="reskin_joint_${3*4+2}" type="fixed">
+        <parent link="link_${3*4+2}.0"/>
+        <child link="reskin_link_${3*4+2}.0"/>
+        <origin rpy="0 0 0" xyz="${reskin_joint_x} ${reskin_joint_y} ${reskin_joint_z}"/>
+    </joint>
+
+	<link name="reskin_link_${3*4+3}.0">
+    	<visual>
+      		<geometry>
+                <mesh filename="${asset_prefix}/meshes/reskin_finger_pad.stl" scale="0.001 0.001 0.002"/>
+        	</geometry>
+            <origin rpy="${-90*DEG2RAD} 0 ${-90*DEG2RAD}" xyz="0 0 0"/>
+            <material name="grey">
+                <color rgba="0.4 0.4 0.4 1"/>
+            </material>
+    	</visual>
+	</link>
+
+    <joint name="reskin_joint_${3*4+3}" type="fixed">
+        <parent link="link_${3*4+3}.0"/>
+        <child link="reskin_link_${3*4+3}.0"/>
+        <origin rpy="0 0 0" xyz="${reskin_joint_x} ${reskin_joint_y} ${reskin_joint_z}"/>
+    </joint>
+
+</xacro:macro>
+
+<xacro:macro name="meta_finger" params="asset_prefix finger_num fingertip sphere_fingertip_coll offset_origin_x offset_origin_y offset_origin_z finger_angle_r fingertip_angle_r fingertip_angle_y" >
+
+    <xacro:property name="reskin_joint_x_base" value="0.0118" />
+    <xacro:property name="reskin_joint_x" value="0.0118" />
+    <xacro:property name="reskin_joint_y" value="0.009" />
+    <xacro:property name="reskin_joint_z0" value="0.022" />
+    <xacro:property name="reskin_joint_z1" value="0.053" />
+    <xacro:property name="reskin_joint_z2" value="0.0375" />
+
+    <xacro:finger
+        asset_prefix=           "${asset_prefix}"
+        finger_num=			    "${finger_num}"
+        fingertip=			    "${fingertip}"
+        sphere_fingertip_coll=  "${sphere_fingertip_coll}"
+        offset_origin_x=	    "${offset_origin_x}"
+        offset_origin_y=	    "${offset_origin_y}"
+        offset_origin_z=	    "${offset_origin_z}"
+        finger_angle_r=		    "${finger_angle_r}"
+        fingertip_angle_r=      "${fingertip_angle_r}"
+        fingertip_angle_y=      "${fingertip_angle_y}"
+    />
+
+
+	<link name="reskin_link_${finger_num*4+1}.0a">
+    	<visual>
+      		<geometry>
+                <mesh filename="${asset_prefix}/meshes/reskin_finger_pad.stl" scale="0.001 0.001 0.002"/>
+        	</geometry>
+            <origin rpy="${-90*DEG2RAD} 0 ${-90*DEG2RAD}" xyz="0 0 0"/>
+            <material name="grey">
+                <color rgba="0.4 0.4 0.4 1"/>
+            </material>
+    	</visual>
+	</link>
+
+    <joint name="reskin_joint_${finger_num*4+1}a" type="fixed">
+        <parent link="link_${finger_num*4+1}.0"/>
+        <child link="reskin_link_${finger_num*4+1}.0a"/>
+        <origin rpy="0 0 0" xyz="${reskin_joint_x_base} ${reskin_joint_y} ${reskin_joint_z0}"/>
+    </joint>
+
+	<link name="reskin_link_${finger_num*4+1}.0b">
+    	<visual>
+      		<geometry>
+                <mesh filename="${asset_prefix}/meshes/reskin_finger_pad.stl" scale="0.001 0.001 0.002"/>
+        	</geometry>
+            <origin rpy="${-90*DEG2RAD} 0 ${-90*DEG2RAD}" xyz="0 0 0"/>
+            <material name="grey">
+                <color rgba="0.4 0.4 0.4 1"/>
+            </material>
+    	</visual>
+	</link>
+
+    <joint name="reskin_joint_${finger_num*4+1}b" type="fixed">
+        <parent link="link_${finger_num*4+1}.0"/>
+        <child link="reskin_link_${finger_num*4+1}.0b"/>
+        <origin rpy="0 0 0" xyz="${reskin_joint_x} ${reskin_joint_y} ${reskin_joint_z1}"/>
+    </joint>
+
+	<link name="reskin_link_${finger_num*4+2}.0">
+    	<visual>
+      		<geometry>
+                <mesh filename="${asset_prefix}/meshes/reskin_finger_pad.stl" scale="0.001 0.001 0.002"/>
+        	</geometry>
+            <origin rpy="${-90*DEG2RAD} 0 ${-90*DEG2RAD}" xyz="0 0 0"/>
+            <material name="grey">
+                <color rgba="0.4 0.4 0.4 1"/>
+            </material>
+    	</visual>
+	</link>
+
+    <joint name="reskin_joint_${finger_num*4+2}" type="fixed">
+        <parent link="link_${finger_num*4+2}.0"/>
+        <child link="reskin_link_${finger_num*4+2}.0"/>
+        <origin rpy="0 0 0" xyz="${reskin_joint_x} ${reskin_joint_y} ${reskin_joint_z2}"/>
+    </joint>
+
+</xacro:macro>
+
+<!-- BASE -->
+<link name="base_link">
+
+	<visual>
+    	<geometry>
+      		<mesh filename="${base_mesh}" />
+      	</geometry>
+
+      	<origin rpy="${base_roll} 0 0" xyz="0 0 0 "/>
+
+      	<material name="black">
+        	<color rgba="0.2 0.2 0.2 1"/>
+      	</material>
+	</visual>
+
+    <collision>
+	    <origin rpy="0 0 0" xyz="-0.009300 0 -${base_link_z/2}"/>
+    	<geometry>
+        	<box size="0.0408 0.1130 ${base_link_z}"/>
+      	</geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.0475" rpy="0 0 0"/>
+      <mass value="0.4154"/>
+      <inertia
+          ixx="1e-4" ixy="0.0" ixz="0.0"
+          iyy="1e-4" iyz="0.0"
+          izz="1e-4"/>
+      </inertial>
+
+</link>
+
+<link name="palm_reskin_link">
+    <visual>
+        <geometry>
+            <mesh filename="${asset_prefix}/meshes/reskin_palm_pad.stl" scale="0.001 0.001 0.004"/>
+        </geometry>
+        <origin rpy="${90*DEG2RAD} 0 ${90*DEG2RAD}" xyz="0 0 0 "/>
+      	<material name="grey">
+        	<color rgba="0.4 0.4 0.4 1"/>
+      	</material>
+    </visual>
+</link>
+
+<joint name="palm_reskin_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="palm_reskin_link"/>
+    <origin rpy="0 0 0" xyz="0.0175 -0.0457 -0.041"/>
+</joint>
+
+<!-- ============================================================================= -->
+<!-- FINGERS -->
+<xacro:meta_finger
+    asset_prefix=           "${asset_prefix}"
+	finger_num=			    "0"
+	fingertip=			    "$(arg fingertip)"
+    sphere_fingertip_coll=  "${sphere_fingertip_coll}"
+	offset_origin_x=	    "${offset_origin_x_const}"
+	offset_origin_y=	    "${finger0_y}"
+	offset_origin_z=	    "${offset_origin_z_const}"
+	finger_angle_r=		    "${finger0_roll}"
+    fingertip_angle_r=      "${fingertip0_roll}"
+    fingertip_angle_y=      "${fingertip0_yaw}"
+/>
+
+<xacro:meta_finger
+    asset_prefix=           "${asset_prefix}"
+	finger_num=			    "1"
+	fingertip=			    "$(arg fingertip)"
+    sphere_fingertip_coll=  "${sphere_fingertip_coll}"
+	offset_origin_x=	    "${offset_origin_x_const}"
+	offset_origin_y=	    "0"
+	offset_origin_z=	    "${offset_origin_z_mid_const}"
+	finger_angle_r=		    "0.0"
+    fingertip_angle_r=      "${fingertip1_roll}"
+    fingertip_angle_y=      "${fingertip1_yaw}"
+/>
+
+<xacro:meta_finger
+    asset_prefix=           "${asset_prefix}"
+	finger_num=			    "2"
+	fingertip=			    "$(arg fingertip)"
+    sphere_fingertip_coll=  "${sphere_fingertip_coll}"
+	offset_origin_x=	    "${offset_origin_x_const}"
+	offset_origin_y=	    "${finger2_y}"
+	offset_origin_z=	    "${offset_origin_z_const}"
+	finger_angle_r=		    "${finger2_roll}"
+    fingertip_angle_r=      "${fingertip2_roll}"
+    fingertip_angle_y=      "${fingertip2_yaw}"
+/>
+
+
+<!-- THUMB -->
+<xacro:meta_thumb
+	side=                   "${side}"
+    asset_prefix=           "${asset_prefix}"
+	fingertip=			    "$(arg fingertip)"
+    sphere_fingertip_coll=  "${sphere_fingertip_coll}"
+	thumb_y=	            "${thumb_y}"
+	thumb_yaw=		        "${thumb_yaw}"
+    thumb_fingertip_roll=   "${fingertip3_roll}"
+    thumb_fingertip_yaw=    "${fingertip3_yaw}"
+/>
+
+</robot>

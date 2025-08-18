@@ -1,0 +1,21 @@
+# @package _global_
+defaults:
+  - override /paths: ~
+  - override /wandb: ~
+  - override /data: byol
+  - override /algorithm: xela_byol
+  - _self_
+
+model_size: tiny
+experiment_name: byol_xela_${model_size}
+ckpt_path: ~
+
+wandb:
+  project: xela_byol
+  group: byol_xela${model_size}
+  tags: ["xela${model_size}"]
+
+trainer:
+  max_epochs: 500
+  validation_frequency: 5
+  checkpoint_frequency: 20

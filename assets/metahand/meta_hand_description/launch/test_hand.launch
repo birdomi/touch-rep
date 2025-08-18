@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<launch>
+
+  <!--
+    roslaunch meta_hand_description test_hand.launch side:=left fingertip:=digitv1
+    roslaunch meta_hand_description test_hand.launch side:=right fingertip:=digitv1
+    roslaunch meta_hand_description test_hand.launch side:=left fingertip:=digit360
+    roslaunch meta_hand_description test_hand.launch side:=right fingertip:=digit360
+  -->
+
+  <arg name="side" default="left" />
+  <arg name="fingertip" default="digit360" />
+
+  <param name="robot_description"
+         textfile="$(find meta_hand_description)/robots/meta_hand_$(arg side)_$(arg fingertip).urdf"/>
+
+  <node name="joint_state_publisher_gui" pkg="joint_state_publisher_gui" type="joint_state_publisher_gui"/>
+
+  <node pkg="robot_state_publisher" type="robot_state_publisher" name="state_publisher"/>
+
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find meta_hand_description)/rviz/meta_hand.rviz" />
+
+</launch>

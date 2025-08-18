@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>meta_hand_description</name>
+  <version>1.0.0</version>
+  <maintainer email="plancaster@meta.com">plancaster</maintainer>
+  <description>The meta_hand_description package</description>
+
+  <license>BSD</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>xacro</buildtool_depend>
+  <buildtool_depend>rosbash</buildtool_depend>
+
+<export>
+   <build_type>ament_cmake</build_type>
+</export>
+</package>

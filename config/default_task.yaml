@@ -1,0 +1,45 @@
+defaults:
+  - paths: default
+  - wandb: wandb_config
+  - data: d360
+  - task: d360_t1_force_estimation
+  - override hydra/job_logging: colorlog
+  - override hydra/hydra_logging: colorlog
+  - _self_
+
+model_info:
+  tiny:
+    embed_dim: 192
+    depth: 12
+    num_heads: 3
+    mlp_ratio: 4
+  small:
+    embed_dim: 384
+    depth: 12
+    num_heads: 3
+    mlp_ratio: 4
+  base:
+    embed_dim: 768
+    depth: 12
+    num_heads: 12
+    mlp_ratio: 4
+  large:
+    embed_dim: 1024
+    depth: 24
+    num_heads: 16
+    mlp_ratio: 4
+
+data_info:
+  full: Full
+  nature: Nature
+
+alg_info:
+  dino: DINO
+  jepa: JEPA
+  mae: MAE
+
+attn_info:
+  Attention: attn
+  MemEffAttention: attn
+  DiffAttention: diff_attn
+  MemEffDiffAttention: diff_attn

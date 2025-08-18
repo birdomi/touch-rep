@@ -1,0 +1,70 @@
+#@package _global_
+
+task_name: t1_force
+ssl_model_size: tiny
+experiment_name: ${sensor}_${task_name}_${ssl_name}_vit${ssl_model_size}_${train_data_budget}
+checkpoint_encoder: ${paths.encoder_checkpoint_root}/${ssl_name}_xela_${ssl_model_size}.ckpt
+seed: 42
+
+hydra:
+  job:
+    id: ${now:%Y.%m.%d}_${now:%H-%M}
+  run:
+    dir: ${paths.log_dir}/${hydra.job.id}_${experiment_name}
+
+wandb:
+  project: ${task_name}_${sensor}_inc
+  group: ~
+  tags: ["${ssl_name}", "sphere&flat"]
+
+trainer:
+  max_epochs: 51
+  validation_frequency: 5
+  sanity_validate: true
+  save_checkpoint_dir: ${paths.output_dir}/checkpoints
+  checkpoint_interval_type: "log"
+  max_task_checkpoints: 10
+  save_probe_weights_only: True
+
+data:
+  train_data_budget: ${train_data_budget}
+  val_data_budget: ${val_data_budget}
+
+task:
+  _target_: tactile_ssl.downstream_task.XelaForceSLModule
+  checkpoint_task: ~
+
+  model_encoder:
+    _target_: tactile_ssl.model.xela_${ssl_model_size}
+    in_dim: 368
+    in_chans: 6
+    sequence_length: 10
+    time_chunk_size: 10
+    pos_embed_fn: learned
+    num_register_tokens: 1
+    with_masktoken: True
+    drop_path_rate: 0.3
+    drop_path_uniform: True
+    causal: False
+    normalization:
+
+  model_task:
+    _target_: tactile_ssl.downstream_task.XelaForceLinearProbe
+    time_chunk_size: ${task.model_encoder.time_chunk_size}
+    embed_dim: ${ssl_model_size}
+    num_heads: 12
+    depth: 1
+    with_last_activations: True
+    only_normal_force: False
+    pad_id: ~
+
+  checkpoint_encoder: ${checkpoint_encoder}
+  train_encoder: false
+  encoder_type: ${ssl_name}
+
+  optim_cfg:
+    _partial_: True
+    _target_: torch.optim.Adam
+    lr: 0.0001
+
+  scheduler_cfg: ~

@@ -1,0 +1,25 @@
+# @package _global_
+defaults:
+  - override /paths: ~
+  - override /wandb: ~
+  - override /data: xela
+  - override /algorithm: xela_dinov2
+  - _self_
+
+model_size: tiny
+experiment_name: dinov2_xela_${model_size}
+ckpt_path: ~
+
+wandb:
+  project: xela_dinov2
+  group: dino_xela${model_size}
+  tags: ["xela${model_size}"]
+
+trainer:
+  max_epochs: 500
+  validation_frequency: 5
+
+algorithm:
+  centering: centering
+  encoder:
+    _target_: tactile_ssl.model.xela_${model_size}
