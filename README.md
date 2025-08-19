@@ -1,4 +1,4 @@
-# Multisensory Touch Representations for Dexterous Manipulation
+# Multisensory Touch Representations for full hand dexterous manipulation
 
 <p align="center">
 <img src="./assets/readme/readme_fig1.jpeg" alt="drawing" width="700"/>
@@ -19,12 +19,11 @@ This repository contains training and evaluation code for Sparsh-X and Sparsh-Sk
 <sup>+</sup>Equal Advising
 </p>
 
-### Sparsh-X
+<h2 align='center'>Sparsh-X</h2>
 <p align="center">
 Carolina Higuera*, Akash Sharma*, Taosha Fan*, Chaithanya Krishna Bodduluri, Byron Boots, Michael Kaess, Mike Lambeta, Tingfan Wu, Zixi Liu, Francois Robert Hogan+, Mustafa Mukadam+ </p>
-
+<p align='center'><small> CoRL 2025 (Oral) </small></p>
 <p align="center">
-  <!-- <a href="https://ai.facebook.com/research/publications/sparsh-self-supervised-touch-representations-for-vision-based-tactile-sensing"><img src="http://img.shields.io/badge/Paper-PDF-red.svg"></img></a> -->
   <a href="https://arxiv.org/abs/2506.14754"><img src="https://img.shields.io/badge/arXiv-2410.24090-b31b1b.svg"></img></a>
   <a href="https://akashsharma02.github.io/sparsh-x-ssl/"><img src="http://img.shields.io/badge/Project-Page-blue.svg"></img></a>
   <a href="https://youtu.be/lJ4JGNmo-do"><img src="http://img.shields.io/badge/Video-Link-green.svg"></img></a>
@@ -33,12 +32,11 @@ Carolina Higuera*, Akash Sharma*, Taosha Fan*, Chaithanya Krishna Bodduluri, Byr
 
 </p>
 
-### Sparsh-Skin
+<h2 align='center'>Sparsh-Skin</h2>
 <p align="center">
 Akash Sharma, Carolina Higuera, Chaithanya Krishna Bodduluri, Zixi Liu, Taosha Fan, Tess Hellebrekers, Mike Lambeta, Byron Boots, Michael Kaess, Tingfan Wu, Francois Robert Hogan, Mustafa Mukadam </p>
-
+<p align='center'><small>CoRL 2025</small></p>
 <p align="center">
-  <!-- <a href="https://ai.facebook.com/research/publications/sparsh-self-supervised-touch-representations-for-vision-based-tactile-sensing"><img src="http://img.shields.io/badge/Paper-PDF-red.svg"></img></a> -->
   <a href="https://arxiv.org/abs/2505.11420"><img src="https://img.shields.io/badge/arXiv-2410.24090-b31b1b.svg"></img></a>
   <a href="https://akashsharma02.github.io/sparsh-skin-ssl/"><img src="http://img.shields.io/badge/Project-Page-blue.svg"></img></a>
   <a href="https://youtu.be/T_ha7fH7qKM?si=Nks2St5Scz5IJriA"><img src="http://img.shields.io/badge/Video-Link-green.svg"></img></a>
@@ -56,12 +54,12 @@ Akash Sharma, Carolina Higuera, Chaithanya Krishna Bodduluri, Zixi Liu, Taosha F
 
 Clone this repository:
 ```bash
-git clone https://github.com/facebookresearch/tactile-ssl.git
+git clone https://github.com/facebookresearch/sparsh-multisensory-touch.git
 cd tactile-ssl
 ```
 Then,  create the `tactile_ssl` python environment. We recommend creating a new environment using `mamba` or `conda`. Our code needs `python >= 3.9`.
 ```bash
-bash local_env.sh tactile_ssl
+bash local_env.sh 
 ```
 
 Finally you can install the `tactile-ssl` package as
@@ -224,8 +222,6 @@ with torch.inference_mode():
 ```
 
 
-
-
 ## 🏋️‍♂️ Training tactile representations
 
 Add the corresponding `data/`, `algorithm/` and `experiment/` config files for your sensor and SSL pretraining dataset. For launching the training job, run:
@@ -282,13 +278,45 @@ Use the script `tactile_ssl/data/d360_tactile.py` to format the inputs (dataset)
 
 
 ### Sparsh-skin 
+<div style="display: flex; align-items: center;">
+<div style="flex: 2;">
+For Sparsh-skin the dataset consists of ~4 hours of contact data with different types of household objects, collected via a VR teleoperation using the Meta Quest 3. There are 14 different objects in the dataset, each containing 10 sequences per object, which are each ~2 mins long. Every object has varied interaction with the object, including sliding, tapping, object reorientation in the hand, and the like.
+</div> 
+<div style="flex: 1; text-align: right;">
+<img src="./assets/readme/xela_dataset.png" alt="drawing" width='700'>
+</div>
+</div>
 
+We provide the sequences used for SSL training in an extracted `pickle` format. Each sequence in the dataset has the following structure: 
+
+```bash
+.
+├── ball
+│   ├── 0
+│   │   ├── allegro # contains data.pkl with allegro joint states information
+│   │   ├── left_camera # contains auxiliary left camera view for inspection
+│   │   ├── top_camera # contains auxiliary top camera view for inspection
+│   │   └── xela # contains `data.pkl` and `forces.pkl`; `data.pkl` contains raw data used for training, and `forces.pkl` contains 
+│   ├── 1
+|   |....
+| 
+|-- baseline
+│   ├── allegro
+│   ├── realsense
+│   │   └── color
+│   └── xela
+|-- urdf
+```
+
+<div>
+Download our dataset from <a href="https://huggingface.co/datasets/facebook/sparsh-skin-dataset">Hugging Face</a>!
+</div>
 
 
 ## License
 This project is licensed under [LICENSE](LICENSE).
 
-## 📚 Citing Sparsh-X and Sparsh-Skin
+## 📚 Citing the Sparsh family of tactile representations
 
 If you find this repository useful, please consider giving a star :star: and citation:
 
