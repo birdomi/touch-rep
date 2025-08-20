@@ -119,7 +119,7 @@ We provide various pretrained model weights for different sensor configurations 
   </tr>
   <tr>
     <td>Sparsh-Skin (Xela)</td>
-    <td><a href="https://drive.google.com/file/d/1OfvFdNEU1brxelcCRrspOv58wLCpYBcX/view?usp=drive_link">ckpt</a></td>
+    <td><a href="https://huggingface.co/facebook/sparsh-skin">ckpt</a></td>
   </tr>
   </tbody>
 </table>
