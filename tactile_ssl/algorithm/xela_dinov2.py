@@ -298,6 +298,7 @@ class XelaDINOv2Module(DINOv2Module):
                 target = einops.rearrange(
                     target, "b (t k) n c -> b (t n) (c k)", k=self.student_encoder_dict["backbone"].time_chunk_size
                 )
+
                 probe_loss, decoded_x = probe(embedding, target=target)
                 online_probes_loss += probe_loss
                 output[f"{probe_name}_loss"] = probe_loss.item()

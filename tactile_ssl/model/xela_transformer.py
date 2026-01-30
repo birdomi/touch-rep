@@ -88,13 +88,13 @@ class XelaTransformer(SignalTransformer):
             self.register_buffer("xela_mean", torch.tensor([0, 0, 0]))
             self.register_buffer("xela_std", torch.tensor([1, 1, 1]))
         print(f"Xela mean: {self.xela_mean}, Xela std: {self.xela_std}")
-        # self.patch_embed = PatchEmbed1d(
-        #     modal_chans=in_chans,
-        #     modal_lens=sequence_length,
-        #     chunk_size=self.time_chunk_size,
-        #     embed_dim=self.embed_dim,
-        # )
-        self.patch_embed = nn.Linear(in_chans, self.embed_dim)
+        self.patch_embed = PatchEmbed1d(
+            modal_chans=in_chans,
+            modal_lens=sequence_length,
+            chunk_size=self.time_chunk_size,
+            embed_dim=self.embed_dim,
+        )
+        # self.patch_embed = nn.Linear(in_chans, self.embed_dim)
         self.taxeltypes = ["4x4", "4x6", "curved"]
         self.taxeltype_embed = nn.Parameter(torch.zeros(3, self.embed_dim))
 
@@ -127,11 +127,11 @@ class XelaTransformer(SignalTransformer):
     def pre_embed(self, x: torch.Tensor):
         b = x.shape[0]
         x = self.normalize(x)
-
-        # x = einops.rearrange(x, "b t n c -> (b n) c t")
+        x = einops.rearrange(x, "b t n c -> (b n) c t")
 
         sensor_embed = self.patch_embed(x)
-        # sensor_embed = einops.rearrange(sensor_embed, "(b n) c t -> b t n c", b=b)
+
+        sensor_embed = einops.rearrange(sensor_embed, "(b n) c t -> b t n c", b=b)
 
         # We add a learnable embedding to identify different types of xela taxels
         prev_idx = 0

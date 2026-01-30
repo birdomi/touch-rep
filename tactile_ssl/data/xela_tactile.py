@@ -72,8 +72,11 @@ class XelaSSLDataset(data.Dataset):
         self.num_xela_taxels = len(XELA_FLATTEN_ORDER.keys())
         self.max_sensors_per_taxel = 30
 
+        # print("##", self.window_time, self.window_overlap, self.num_frames_per_window, self.shift_per_window)
+
         assert Path(xela_urdf_path).exists(), f"{xela_urdf_path} does not exist"
         self.xela_kinematic_chain = pk.build_chain_from_urdf(open(xela_urdf_path).read())
+        # print(self.xela_kinematic_chain)
 
         self.data_path = data_path
         xela_dict, allegro_dict = load_data_dict(self.data_path)
@@ -89,6 +92,7 @@ class XelaSSLDataset(data.Dataset):
         allegro_array = None
         if allegro_dict is not None:
             allegro_array = np.array(allegro_dict["joint_states"], copy=True)
+            # print(allegro_array.shape)
             self.timestamps, self.num_frames = compute_interp_timestamps(
                 [xela_array[:, 0, 0], allegro_array[:, 0]], self.interpolating_freq
             )
@@ -140,7 +144,7 @@ class XelaSSLDataset(data.Dataset):
             ax.grid(False)
             plt.axis("off")
             set_equal_aspect_ratio_3D(ax, sensor_pose[:, :, 0], sensor_pose[:, :, 1], sensor_pose[:, :, 2], alpha=1.5)
-            plt.show()
+            plt.savefig("xela_tactile.png")
 
         max_length = self.num_frames - (self.num_frames % self.num_frames_per_window)
         max_length = max_length - self.num_frames_per_window
@@ -294,7 +298,8 @@ class XelaSSLDataset(data.Dataset):
         sensor_data = torch.from_numpy(sensor_data).float()
         joint_angles = torch.from_numpy(joint_angles).float()
         sensor_poses = torch.from_numpy(joint_poses).float()
-        # sensor_data_ = torch.cat([sensor_data, sensor_poses[..., :3]], dim=-1)
+        # print(sensor_data.shape, joint_angles.shape, sensor_poses.shape)
+        sensor_data = torch.cat([sensor_data, sensor_poses[..., :3]], dim=-1) # concat sensor | pos (x,y,z)
         sample_dict.update({"sensor": sensor_data})
         sample_dict.update({"joint_angles": joint_angles})
         sample_dict.update({"sensor_poses": sensor_poses})
@@ -303,7 +308,7 @@ class XelaSSLDataset(data.Dataset):
         return sample_dict
 
 
-if __name__ == "__main__":
+if __name__ == "__main__": 
     import os
     import hydra
     from omegaconf import OmegaConf, DictConfig

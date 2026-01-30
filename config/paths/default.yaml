@@ -1,7 +1,7 @@
-data_root: /home/sparsh/datasets/
-log_dir: /home/sparsh/tmp/experiments/
-encoder_checkpoint_root: /home/sparsh/checkpoints/
-tacbench_dir: /home/sparsh/tacbench
+data_root: ./sparsh-skin-dataset
+log_dir: ./experiments/
+encoder_checkpoint_root: ./checkpoints/
+tacbench_dir: ./tacbench
 
 output_dir: ${hydra:runtime.output_dir}
 work_dir: ${hydra:runtime.cwd}

@@ -1,16 +1,15 @@
 # @package _global_
 defaults:
-  - override /paths: ~
-  - override /wandb: ~
   - override /data: xela
   - override /algorithm: xela_dinov2
   - _self_
 
 model_size: tiny
 experiment_name: dinov2_xela_${model_size}
-ckpt_path: ~
+ckpt_path: ./
 
 wandb:
+  entity: ryk012
   project: xela_dinov2
   group: dino_xela${model_size}
   tags: ["xela${model_size}"]

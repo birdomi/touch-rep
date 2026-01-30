@@ -260,7 +260,7 @@ class Trainer:
         optimizer: torch.optim.Optimizer,
         train_loader: torch.utils.data.DataLoader,
         limit_batches: Union[int, float] = float("inf"),
-        scheduler_cfg: Optional[Mapping[str, Union[L.fabric.utilities.types.LRScheduler, bool, str, int]]] = None,
+        scheduler_cfg: Optional[Mapping[str, Union[torch.optim.lr_scheduler.LRScheduler, bool, str, int]]] = None,
         wd_scheduler_cfg: Optional[Mapping[str, Union[object, bool, str, int]]] = None,
     ):
         """The training loop running a single training epoch.
@@ -444,7 +444,7 @@ class Trainer:
 
     def step_scheduler(
         self,
-        scheduler_cfg: Optional[Mapping[str, Union[L.fabric.utilities.types.LRScheduler, bool, str, int]]],
+        scheduler_cfg: Optional[Mapping[str, Union[torch.optim.lr_scheduler.LRScheduler, bool, str, int]]],
         level: Literal["step", "epoch"],
         current_value: int,
     ) -> None:
@@ -615,7 +615,7 @@ class Trainer:
 
     def _parse_optimizers_schedulers(self, configure_optim_output) -> Tuple[
         Optional[L.fabric.utilities.types.Optimizable],
-        Optional[Mapping[str, Union[L.fabric.utilities.types.LRScheduler, bool, str, int]]],
+        Optional[Mapping[str, Union[torch.optim.lr_scheduler.LRScheduler, bool, str, int]]],
         Optional[Mapping[str, Union[object, bool, str, int]]],
     ]:
         """Recursively parses the output of :meth:`lightning.pytorch.LightningModule.configure_optimizers`.
@@ -636,7 +636,7 @@ class Trainer:
             return configure_optim_output, None, None
 
         # single lr scheduler
-        if isinstance(configure_optim_output, L.fabric.utilities.types.LRScheduler):
+        if isinstance(configure_optim_output, torch.optim.lr_scheduler.LRScheduler):
             return (
                 None,
                 _lr_sched_defaults.update(scheduler=configure_optim_output),
@@ -663,7 +663,7 @@ class Trainer:
                 raise NotImplementedError("Trainer only supports a single optimizer for now")
 
             if all(
-                isinstance(_lr_cand, (L.fabric.utilities.types.LRScheduler, Mapping))
+                isinstance(_lr_cand, (torch.optim.lr_scheduler.LRScheduler, Mapping))
                 for _lr_cand in configure_optim_output
             ):
                 # single scheduler in list

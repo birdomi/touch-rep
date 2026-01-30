@@ -15,7 +15,7 @@ import yourdfpy
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
-from tactile_ssl.data.reskin.visualizer2d import plot_magnetic_heatmap
+# from tactile_ssl.data.reskin.visualizer2d import plot_magnetic_heatmap
 from tactile_ssl.data.xela_tactile import XelaSSLDataset
 from tactile_ssl.data.xela.utils import (
     XELA_FLATTEN_ORDER,
@@ -184,16 +184,16 @@ def _viser_name_from_frame(
     return root_node_name + "/" + "/".join(frames[::-1])
 
 
-def create_magfield_image(mesh_id, magfield, sensor_positions):
-    coords = sensor_positions * 1000
-    height = 23.20
-    width = 22.20
-    resolution = 128
-    if "palm" in mesh_id:
-        height = 37.17
-        width = 96.46
-    image = plot_magnetic_heatmap(magfield, coords, resolution, height, width, scale=0.1, colormap="jet")
-    return image
+# def create_magfield_image(mesh_id, magfield, sensor_positions):
+#     coords = sensor_positions * 1000
+#     height = 23.20
+#     width = 22.20
+#     resolution = 128
+#     if "palm" in mesh_id:
+#         height = 37.17
+#         width = 96.46
+#     image = plot_magnetic_heatmap(magfield, coords, resolution, height, width, scale=0.1, colormap="jet")
+#     return image
 
 
 def add_joint_angle_sliders(urdf: ViserUrdf, server: viser.ViserServer) -> None:
@@ -327,7 +327,7 @@ def load_data(data_path: str, baseline_signal_path, urdf_path: str, num_frames: 
         prev_idx = 0
         for i, k in enumerate(XELA_FLATTEN_ORDER.keys()):
             sensor_ = sensor[i, :]
-            sensor_ = einops.rearrange(sensor_, "(n c) -> n c", c=6)[..., :3]
+            sensor_ = einops.rearrange(sensor_, "(n c) -> n c", c=3)[..., :3]
             sensor_grid = None
             if "aftc" in k:  # curved fingertip sensor
                 sensor_grid = onp.zeros((6, 6, 3))
