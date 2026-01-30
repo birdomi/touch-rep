@@ -1,36 +1,7 @@
 # Multisensory Touch Representations for full hand dexterous manipulation
 
-<p align="center">
-<img src="./assets/readme/readme_fig1.jpeg" alt="drawing" width="700"/>
-</p>
-
 This repository contains training and evaluation code for Sparsh-X and Sparsh-Skin, a family of encoder backbones for multisensory touch representation learning:
-
-- **Sparsh-X**: Focuses on fusing multiple tactile sensing modalities available in the Digit 360 sensor (tactile image, audio, IMU and pressure)
 - **Sparsh-Skin**: Provides embeddings for tactile data from magnetic skins covering dexterous hands
-
-<p align="center">
-  <a href=https://ai.facebook.com/research/ai-systems>AI at Meta, FAIR</a>;
-  <a href=https://ri.cmu.edu/>The Robotics Institute, CMU</a>;
-  <a href=https://www.washington.edu/>University of Washington</a>
-</p>
-<p align="center">
-<sup>*</sup>Equal contribution,
-<sup>+</sup>Equal Advising
-</p>
-
-<h2 align='center'>Sparsh-X</h2>
-<p align="center">
-Carolina Higuera*, Akash Sharma*, Taosha Fan*, Chaithanya Krishna Bodduluri, Byron Boots, Michael Kaess, Mike Lambeta, Tingfan Wu, Zixi Liu, Francois Robert Hogan+, Mustafa Mukadam+ </p>
-<p align='center'><small> CoRL 2025 (Oral) </small></p>
-<p align="center">
-  <a href="https://arxiv.org/abs/2506.14754"><img src="https://img.shields.io/badge/arXiv-2410.24090-b31b1b.svg"></img></a>
-  <a href="https://akashsharma02.github.io/sparsh-x-ssl/"><img src="http://img.shields.io/badge/Project-Page-blue.svg"></img></a>
-  <a href="https://youtu.be/lJ4JGNmo-do"><img src="http://img.shields.io/badge/Video-Link-green.svg"></img></a>
-  <a href="https://huggingface.co/collections/carohiguera/sparsh-x-68a02683b28a46ccae83cf77"><img src="https://img.shields.io/badge/Models%20and%20datasets-Link-yellow?logo=huggingface"></img></a>
-  <a href="#-citing-sparsh-x-and-sparsh-skin"><img src="http://img.shields.io/badge/Cite-Us-orange.svg"></img></a>
-
-</p>
 
 <h2 align='center'>Sparsh-Skin</h2>
 <p align="center">
@@ -44,10 +15,6 @@ Akash Sharma, Carolina Higuera, Chaithanya Krishna Bodduluri, Zixi Liu, Taosha F
   <a href="#-citing-sparsh-x-and-sparsh-skin"><img src="http://img.shields.io/badge/Cite-Us-orange.svg"></img></a>
 
 </p>
-
-
-
-
 
 
 ## 🛠️Installation and setup
@@ -157,44 +124,7 @@ The config folder is organized as follows:
 
 You can run the following script to test the pretrained Sparsh-X model on a dummy input.
 
-1. For the Sparsh-X model you can do the following:
-```python
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from tactile_ssl.build_encoder import build_encoder
-
-config = "config/encoder/digit360_sparshx.yaml"
-ckpt_path = "checkpoints/d360_sparshx_img_mic_imu_pressure_base.pth" # change to your checkpoints path
-
-sparsh_encoder = build_encoder(config, ckpt_path=ckpt_path, device="cuda", mode="eval")
-
-with torch.inference_mode():
-  # Dummy input
-  tactile_img = torch.randn(1, 6, 224, 224)
-  tactile_audio = torch.randn(1, 224, 256)
-  tactile_imu = torch.randn(1, 224, 3)
-  tactile_pressure = torch.randn(1, 224, 1)
-  # -----------
-
-  input_dict = {
-    "img": tactile_img.to("cuda"),
-    "mic": tactile_audio.to("cuda"),
-    "imu": tactile_imu.to("cuda"),
-    "pressure": tactile_pressure.to("cuda"),
-  }
-  # Forward pass
-  tactile_rep = sparsh_encoder(input_dict)
-
-  # organize output
-  tactile_embeddings = []
-  for k, v in tactile_rep.items():
-    print(f"{k}: {v.shape}")
-    rep = F.layer_norm(v, (v.shape[-1], ))
-    tactile_embeddings.append(rep)
-  tactile_embeddings = torch.cat(tactile_embeddings, dim=1)
-```
-2. Similarly, for the Sparsh-Skin model you can do the following:
+1. Similarly, for the Sparsh-Skin model you can do the following:
 ```python
 import torch
 import torch.nn as nn
@@ -244,39 +174,6 @@ To do this:
 python train_task.py +experiment=${YOUR EXP NAME} paths=${YOUR PATH CONFIG} wandb=${YOUR WANDB CONFIG} task.sensors=[img, mic, imu, pressure] +paths.encoder_checkpoint_root=${ROOT PATH TO CKPTS}
 ```
 ## 📥 Pretraining datasets
-
-### Sparsh-X
-
-<div style="display: flex; align-items: center;">
-<div style="flex: 2;">
-Our SSL training dataset consists of ∼1M samples generated from two primary sources: an Allegro hand with Digit 360 sensors on the fingertips that performs random motions with objects such as dipping into a tray filled with various items; and a manual picker with the same sensor adapted to the gripping mechanism, used to execute atomic manipulation actions such as picking up, sliding, tapping, placing, and dropping objects against diverse surfaces that vary in roughness, hardness, softness, friction, and texture properties.
-</div>
-<div style="flex: 1; text-align: right;">
-<img src="./assets/readme/readme_fig2.png" alt="drawing" width="250"/>
-</div>
-</div>
-
-We provide the sequences used for SSL training in `pickle` format. Each sequence has the following structure:
-
-```bash
-├── data.pickle
-│   ├── d360_0
-│   |   ├── image_raw/compressed # list of msgs with tactile image @30Hz
-│   |   ├── imu_quat_topic  # list of msgs with IMU quaternion data @400Hz
-│   |   ├── imu_raw_topic # list of msgs with raw 3-axis accelerometer data @400Hz
-│   |   ├── mic_0 # list of time-series messages from contact microphone @48kHz
-│   |   ├── mic_1 # list of time-series messages from contact microphone @48kHz
-│   |   ├── pressure_topic # list of time-series messages from pressure @200Hz
-```
-
-Use the script `scripts/d360/mcap2pickle.py` to convert an `.mcap` rosbag into the required `pickle` format.
-Use the script `tactile_ssl/data/d360_tactile.py` to format the inputs (dataset) for Sparsh-X.
-
-<div>
-🤗 Download our dataset from <a href="https://huggingface.co/datasets/facebook/sparsh-x-dataset">Hugging Face</a>!
-</div>
-
-
 ### Sparsh-skin 
 <div style="display: flex; align-items: center;">
 <div style="flex: 2;">
@@ -330,29 +227,6 @@ year={2025},
 url={https://openreview.net/forum?id=eLeCrM5PEO}
 }
 ```
-
-```bibtex
-@inproceedings{
-higuera2025tactile,
-title={Tactile Beyond Pixels: Multisensory Touch Representations for Robot Manipulation},
-author={Carolina Higuera and Akash Sharma and Taosha Fan and Chaithanya Krishna Bodduluri and Byron Boots and Michael Kaess and Mike Lambeta and Tingfan Wu and Zixi Liu and Francois Robert Hogan and Mustafa Mukadam},
-booktitle={9th Annual Conference on Robot Learning},
-year={2025},
-url={https://openreview.net/forum?id=sMs4pJYhWi}
-}
-```
-
-```bibtex
-@inproceedings{
-  higuera2024sparsh,
-  title={Sparsh: Self-supervised touch representations for vision-based tactile sensing},
-  author={Carolina Higuera and Akash Sharma and Chaithanya Krishna Bodduluri and Taosha Fan and Patrick Lancaster and Mrinal Kalakrishnan and Michael Kaess and Byron Boots and Mike  Lambeta and Tingfan Wu and Mustafa Mukadam},
-  booktitle={8th Annual Conference on Robot Learning},
-  year={2024},
-  url={https://openreview.net/forum?id=xYJn2e1uu8}
-}
-```
-
 ## 🤝 Acknowledgements
 
 
