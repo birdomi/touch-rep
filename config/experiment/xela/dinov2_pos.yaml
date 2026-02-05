@@ -1,0 +1,63 @@
+# @package _global_
+defaults:
+  - override /data: xela
+  - override /algorithm: xela_dinov2_pos
+  - _self_
+
+model_size: tiny
+experiment_name: dinov2_xela_pos_${model_size}
+ckpt_path: ./
+
+wandb:
+  entity: ryk012
+  project: dinov2_xela_pos
+  group: dino_xela${model_size}
+  tags: ["xela${model_size}"]
+
+trainer:
+  max_epochs: 500
+  validation_frequency: 5
+
+algorithm:
+  centering: centering
+  encoder:
+    _target_: tactile_ssl.model.xela_pos_${model_size}
+    in_chans: 3 # 3 xela mag channels
+
+data:
+  dataset_list:
+    - type: teleop
+      sequence_list:
+        - corn
+        - rubikscube
+        - metalcup
+        - cup
+        - ball
+        - drill
+        - mustard
+        - lego
+        - pringle
+        - legopool
+        - watermelon
+        - popcorn
+        - loofah
+        - slipper
+      train_dataset_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+      val_dataset_ids: [9]
+
+      dataset:
+        _target_: tactile_ssl.data.xela_tactile.XelaSSLDataset
+        config:
+          window_time: ${data.window_time}
+          window_overlap: ${data.window_overlap}
+          interpolating_freq: ${data.interpolating_freq}
+          subtract_baseline: True
+          concat_sensor_poses: False
+          smooth_data: False
+          bias_noise_std: 0
+          bias_range: 0
+        data_path: ${paths.data_root}/sparsh-skin-dataset/pretraining/
+        baseline_signal_path: ${paths.data_root}/sparsh-skin-dataset/pretraining/baseline/xela/data.pkl
+        xela_urdf_path: ${paths.data_root}/sparsh-skin-dataset/pretraining/urdf/ahrcpcpn.urdf
+        load_images: False
+    

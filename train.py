@@ -51,7 +51,6 @@ def get_dataloaders_magnetic_based(cfg: DictConfig):
     data_cfg = cfg.data
 
     if data_cfg.sensor == "xela":
-
         def get_xela_dataset(dataset_cfg: DictConfig, dataset_name: str, d_id: int, object_class: Optional[int] = None):
             data_path = f"{dataset_cfg.data_path}"
             data_files = os.listdir(data_path)

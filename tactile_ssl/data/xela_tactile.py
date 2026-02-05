@@ -50,6 +50,8 @@ class XelaSSLDataset(data.Dataset):
             config.bias_noise_std = 0.0
         if config.get("bias_range") is None:
             config.bias_range = 0.0
+        if config.get("concat_sensor_poses") is None:
+            config.concat_sensor_poses = True
         if baseline_signal_path is None:
             config.subtract_baseline = False
 
@@ -68,15 +70,13 @@ class XelaSSLDataset(data.Dataset):
         self.bias_range = config.bias_range
         self.augment = False if self.bias_noise_std == 0.0 and self.bias_range == 0.0 else True
         self.object_label = object_class
+        self.concat_sensor_poses = config.concat_sensor_poses
 
         self.num_xela_taxels = len(XELA_FLATTEN_ORDER.keys())
         self.max_sensors_per_taxel = 30
 
-        # print("##", self.window_time, self.window_overlap, self.num_frames_per_window, self.shift_per_window)
-
         assert Path(xela_urdf_path).exists(), f"{xela_urdf_path} does not exist"
         self.xela_kinematic_chain = pk.build_chain_from_urdf(open(xela_urdf_path).read())
-        # print(self.xela_kinematic_chain)
 
         self.data_path = data_path
         xela_dict, allegro_dict = load_data_dict(self.data_path)
@@ -298,8 +298,9 @@ class XelaSSLDataset(data.Dataset):
         sensor_data = torch.from_numpy(sensor_data).float()
         joint_angles = torch.from_numpy(joint_angles).float()
         sensor_poses = torch.from_numpy(joint_poses).float()
-        # print(sensor_data.shape, joint_angles.shape, sensor_poses.shape)
-        sensor_data = torch.cat([sensor_data, sensor_poses[..., :3]], dim=-1) # concat sensor | pos (x,y,z)
+        if self.concat_sensor_poses:
+            sensor_data = torch.cat([sensor_data, sensor_poses[..., :3]], dim=-1) # concat sensor | pos 
+            
         sample_dict.update({"sensor": sensor_data})
         sample_dict.update({"joint_angles": joint_angles})
         sample_dict.update({"sensor_poses": sensor_poses})
