@@ -266,6 +266,7 @@ class SignalTransformer(nn.Module):
     ):
         x = self.pre_embed(x)
         x, bias = self.prepare_tokens_with_mask(x, masks, mask_type, masktoken_masks)
+        
         x_prenorm, x_postnorm = self.transform(x, bias)
 
         reg_tokens = x_postnorm[:, : self.num_register_tokens]

@@ -83,3 +83,43 @@ class SignalMaskDecoder(SignalTransformer):
 def SignalDecoderBase(**kwargs):
     model = SignalDecoder(num_heads=12, mlp_ratio=4, qkv_bias=True, pos_embed_fn="sinusoidal", **kwargs)
     return model
+
+def ImageDecoderBase(**kwargs):
+    model = ImageDecoder(num_heads=12, mlp_ratio=4, qkv_bias=True, pos_embed_fn="sinusoidal", **kwargs)
+    return model
+
+class ImageDecoder(SignalTransformer):
+    def __init__(self, input_embed_dim: int, img_size: int = 64, patch_size: int = 8, **kwargs):
+        super().__init__(**kwargs)
+        self.input_embed_dim = input_embed_dim
+        self.img_size = img_size
+        self.patch_size = patch_size
+
+        self.decoder_embed = nn.Linear(input_embed_dim, self.embed_dim, bias=True)
+        self.decoder_pred = nn.Linear(self.embed_dim, patch_size * patch_size * 3, bias=True)
+
+    def forward(self, x):
+        """
+        x: (B, N, C)
+        """
+        x = self.decoder_embed(x)
+        for blk in self.blocks:
+            x = blk(x)
+        x = self.norm(x)
+        x = self.decoder_pred(x)
+        
+        # Reshape to image
+        # x: (B, N, P*P*3)
+        # N should be (H/P) * (W/P)
+        h = w = self.img_size // self.patch_size
+        
+        x = einops.rearrange(
+            x,
+            "b (h w) (p1 p2 c) -> b c (h p1) (w p2)",
+            h=h,
+            w=w,
+            p1=self.patch_size,
+            p2=self.patch_size,
+            c=3
+        )
+        return x

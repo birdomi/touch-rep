@@ -411,7 +411,8 @@ class Trainer:
             batch_idx: index of the current batch w.r.t the current epoch
 
         """
-        outputs: Union[torch.Tensor, Mapping[str, Any]] = module.training_step(batch, batch_idx=batch_idx)
+        with self.fabric.autocast():
+            outputs: Union[torch.Tensor, Mapping[str, Any]] = module.training_step(batch, batch_idx=batch_idx)
 
         loss = outputs if isinstance(outputs, torch.Tensor) else outputs["loss"]
 

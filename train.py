@@ -111,7 +111,7 @@ def get_dataloaders_magnetic_based(cfg: DictConfig):
 
         xela_mean, xela_std = compute_xela_normalization(train_datasets)
         logger.info(f"Compute Xela normalization: mean={xela_mean}, std={xela_std}")
-
+        
         with open_dict(cfg):
             cfg.data.normalization.mean = xela_mean.tolist()
             cfg.data.normalization.std = xela_std.tolist()
@@ -230,11 +230,82 @@ def get_dataloaders_d360_based(cfg: DictConfig):
     return train_dset, val_dset
 
 
+def get_dataloaders_gelsight_based(cfg: DictConfig):
+    data_cfg = cfg.data
+    dataset_list = data_cfg.dataset_list
+    
+    # Extract sequences from all dataset items
+    sequences = []
+    dataset_config = None
+    
+    for item in dataset_list:
+        if item.type == 'teleop':
+            sequences.extend(item.sequence_list)
+            # Use the dataset config from the first matching item
+            if dataset_config is None:
+                dataset_config = item.dataset
+                data_path = item.dataset.data_path
+                
+    if not sequences:
+        raise ValueError("No sequences found in dataset_list")
+
+    print(f"Loading {len(sequences)} sequences from {data_path}")
+
+    # Instantiate dataset with all sequences
+    ds = hydra.utils.instantiate(
+        dataset_config,
+        sequences=sequences,
+        data_path=data_path
+    )
+
+    # Calculate class weights for classification probe
+    object_classes = sequences
+    object_class_sizes = np.zeros(len(sequences))
+    
+    # helper to count per class
+    # ds.images is a list of (path, class_id)
+    for _, class_id in ds.images:
+        object_class_sizes[class_id] += 1
+        
+    print(f"Object class sizes: {object_class_sizes}")
+    
+    # Avoid division by zero if a class has 0 images (though unlikely if folders exist)
+    # Add small epsilon or handle gracefully
+    if np.any(object_class_sizes == 0):
+        print("Warning: Some classes have 0 images.")
+        object_class_sizes = np.maximum(object_class_sizes, 1)
+
+    object_class_ratios = object_class_sizes / np.sum(object_class_sizes)
+    object_class_weights = 1 / object_class_ratios
+    object_class_weights = object_class_weights / np.sum(object_class_weights)
+    # print(f"Object class weights: {object_class_weights}")
+
+    with open_dict(cfg):
+        cfg.data.object_classes = object_classes
+        cfg.data.object_class_weights = object_class_weights.tolist()
+
+    # Split
+    # Default to 90/10 split if not specified
+    split_ratio = 0.9
+    train_size = int(split_ratio * len(ds))
+    val_size = len(ds) - train_size
+    train_dset, val_dset = data.random_split(ds, [train_size, val_size])
+    
+    # Set default normalization if not present
+    if cfg.data.normalization.mean is None:
+        cfg.data.normalization.mean = [0.485, 0.456, 0.406]
+        cfg.data.normalization.std = [0.229, 0.224, 0.225]
+
+    return train_dset, val_dset
+
+
 def get_dataloaders(cfg: DictConfig):
     if "d360" in cfg.data.sensor:
         train_dset, val_dset = get_dataloaders_d360_based(cfg)
     elif cfg.data.sensor in ["xela", "tdex"]:
         train_dset, val_dset = get_dataloaders_magnetic_based(cfg)
+    elif cfg.data.sensor == "gelsight":
+        train_dset, val_dset = get_dataloaders_gelsight_based(cfg)
     else:
         raise NotImplementedError(f"Sensor type {cfg.data.sensor} is not supported.")
 

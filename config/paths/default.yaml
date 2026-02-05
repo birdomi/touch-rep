@@ -1,4 +1,4 @@
-data_root: ./sparsh-skin-dataset
+data_root: ./dataset
 log_dir: ./experiments/
 encoder_checkpoint_root: ./checkpoints/
 tacbench_dir: ./tacbench

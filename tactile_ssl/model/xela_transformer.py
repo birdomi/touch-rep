@@ -18,7 +18,7 @@ from tactile_ssl.utils.logging import get_pylogger
 from tactile_ssl.data.xela.utils import XELA_FLATTEN_ORDER
 from tactile_ssl.model import SignalTransformer
 
-from .layers import PatchEmbed1d
+from .layers import PatchEmbed1d, PatchEmbed
 
 log = get_pylogger(__name__)
 
@@ -49,13 +49,18 @@ class XelaTransformer(SignalTransformer):
         with_masktoken: bool = False,
         causal: bool = False,
         normalization: Optional[DictConfig] = None,
+        input_type: str = "xela",
+        patch_size: int = 16,
     ):
         self.in_dim: int = in_dim
         self.in_chans: int = in_chans
         self.sequence_length: int = sequence_length
         self.time_chunk_size: int = time_chunk_size
         self.num_chunks: int = int(sequence_length // time_chunk_size)
-        assert sequence_length % time_chunk_size == 0, "sequence length must be divisible by patch size"
+        self.input_type = input_type
+        
+        if self.input_type == "xela":
+            assert sequence_length % time_chunk_size == 0, "sequence length must be divisible by patch size"
 
         super().__init__(
             in_dim=in_dim,
@@ -85,19 +90,31 @@ class XelaTransformer(SignalTransformer):
             self.register_buffer("xela_mean", torch.tensor(normalization.mean))
             self.register_buffer("xela_std", torch.tensor(normalization.std))
         else:
-            self.register_buffer("xela_mean", torch.tensor([0, 0, 0]))
-            self.register_buffer("xela_std", torch.tensor([1, 1, 1]))
+            self.register_buffer("xela_mean", torch.tensor([0.0]*in_chans))
+            self.register_buffer("xela_std", torch.tensor([1.0]*in_chans))
         print(f"Xela mean: {self.xela_mean}, Xela std: {self.xela_std}")
-        self.patch_embed = PatchEmbed1d(
-            modal_chans=in_chans,
-            modal_lens=sequence_length,
-            chunk_size=self.time_chunk_size,
-            embed_dim=self.embed_dim,
-        )
+        
+        if self.input_type == "xela":
+            self.patch_embed = PatchEmbed1d(
+                modal_chans=in_chans,
+                modal_lens=sequence_length,
+                chunk_size=self.time_chunk_size,
+                embed_dim=self.embed_dim,
+            )
+        elif self.input_type == "image":
+            self.patch_embed = PatchEmbed(
+                img_size=64, # Default, but should ideally be passed or inferred
+                patch_size=patch_size,
+                in_chans=in_chans,
+                embed_dim=embed_dim,
+            )
+        else:
+            raise ValueError(f"Unknown input_type: {self.input_type}")
+
         # self.patch_embed = nn.Linear(in_chans, self.embed_dim)
         self.taxeltypes = ["4x4", "4x6", "curved"]
         self.taxeltype_embed = nn.Parameter(torch.zeros(3, self.embed_dim))
-
+        
         self.head = nn.Identity() if head is None else head
 
         nn.init.trunc_normal_(self.taxeltype_embed, std=0.02)
@@ -111,6 +128,13 @@ class XelaTransformer(SignalTransformer):
 
     def normalize(self, x: torch.Tensor):
         if hasattr(self, "xela_mean") and hasattr(self, "xela_std"):
+            if self.input_type == "image":
+                 # (B, C, H, W)
+                 mean = self.xela_mean.view(1, -1, 1, 1)
+                 std = self.xela_std.view(1, -1, 1, 1)
+                 x = (x - mean) / std
+                 return x
+
             x = einops.rearrange(x, "b t n (k c) -> b t n k c", c=self.in_chans)
             if self.in_chans == 3:
                 x = (x - self.xela_mean) / self.xela_std
@@ -126,7 +150,15 @@ class XelaTransformer(SignalTransformer):
 
     def pre_embed(self, x: torch.Tensor):
         b = x.shape[0]
+
         x = self.normalize(x)
+        if self.input_type == "image":
+            # x is (B, C, H, W)
+            x = self.patch_embed(x) # (B, L, Embed)
+            # Add time dimension t=1 to match (B, t, n, c) expectation
+            x = x.unsqueeze(1) # (B, 1, L, Embed)
+            return x
+
         x = einops.rearrange(x, "b t n c -> (b n) c t")
 
         sensor_embed = self.patch_embed(x)
@@ -247,7 +279,7 @@ def xela_small(
         time_chunk_size=time_chunk_size,
         embed_dim=384,
         depth=depth,
-        num_heads=6,
+        num_heads=3,
         mlp_ratio=4,
         num_register_tokens=num_register_tokens,
         **kwargs,

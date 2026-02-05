@@ -22,7 +22,7 @@ class XelaDINOv2Module(DINOv2Module):
         ibot_mask_ratio: List[float] = [0.1, 0.5],
         *args,
         **kwargs,
-    ):
+    ): 
         super().__init__(*args, **kwargs)
         # TODO: Load this in a different way
         # This is valid only when the baseline is subtracted in the xela dataset
@@ -37,23 +37,30 @@ class XelaDINOv2Module(DINOv2Module):
                 return
             if (step % self.log_freq_img == 0) and "reconstruction_img" in outputs.keys():
                 X_pred = outputs["reconstruction_img"]
-                encoder = self.student_encoder_dict["backbone"]
-                X_pred = einops.rearrange(
-                    X_pred,
-                    "b (t n) (c k) ->b (t k) n c",
-                    k=encoder.time_chunk_size,
-                    n=encoder.in_dim,
-                )
-                # in_dims corresponds to num sensors
-                X_pred = einops.rearrange(X_pred, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=encoder.in_chans)
                 X_orig = batch["sensor"]
-                X_orig = einops.rearrange(X_orig, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=encoder.in_chans)
-                X_pred = X_pred[0].cpu().numpy()[..., 0, :3]
-                X_orig = X_orig[0].cpu().numpy()[..., 0, :3]
-                xela_mean = self.teacher_encoder_dict["backbone"].xela_mean.detach().cpu().numpy()
-                xela_std = self.teacher_encoder_dict["backbone"].xela_std.detach().cpu().numpy()
-                X_pred = xela_sensor_layout(X_pred, xela_mean, xela_std)
-                X_orig = xela_sensor_layout(X_orig)
+
+                encoder = self.student_encoder_dict["backbone"]
+
+                if self.teacher_encoder_dict["backbone"].input_type == 'image':
+                    X_pred = X_pred[:5].cpu().numpy()
+                    X_orig = X_orig[:5].cpu().numpy()
+                    print(X_pred.shape, X_orig.shape)
+                if not self.teacher_encoder_dict["backbone"].input_type == 'image':
+                    X_pred = einops.rearrange(
+                        X_pred,
+                        "b (t n) (c k) ->b (t k) n c",
+                        k=encoder.time_chunk_size,
+                        n=encoder.in_dim,
+                    )
+                    # in_dims corresponds to num sensors
+                    X_pred = einops.rearrange(X_pred, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=encoder.in_chans)
+                    X_orig = einops.rearrange(X_orig, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=encoder.in_chans)
+                    X_pred = X_pred[0].cpu().numpy()[..., 0, :3]
+                    X_orig = X_orig[0].cpu().numpy()[..., 0, :3]
+                    xela_mean = self.teacher_encoder_dict["backbone"].xela_mean.detach().cpu().numpy()
+                    xela_std = self.teacher_encoder_dict["backbone"].xela_std.detach().cpu().numpy()
+                    X_pred = xela_sensor_layout(X_pred, xela_mean, xela_std)
+                    X_orig = xela_sensor_layout(X_orig)
 
                 trainer_instance.wandb.log(
                     {
@@ -295,10 +302,12 @@ class XelaDINOv2Module(DINOv2Module):
         for probe in self.online_probes:
             probe_name: str = str(probe.probe_name)
             if probe_name == "reconstruction":
-                target = einops.rearrange(
-                    target, "b (t k) n c -> b (t n) (c k)", k=self.student_encoder_dict["backbone"].time_chunk_size
-                )
-
+                if not self.teacher_encoder_dict["backbone"].input_type == 'image':
+                    target = einops.rearrange(
+                        target, "b (t k) n c -> b (t n) (c k)", k=self.student_encoder_dict["backbone"].time_chunk_size
+                    )
+                # print(probe, embedding.shape) # embedding = B N C
+                # print(target.shape, embedding.shape) # 64, 192, 64
                 probe_loss, decoded_x = probe(embedding, target=target)
                 online_probes_loss += probe_loss
                 output[f"{probe_name}_loss"] = probe_loss.item()
