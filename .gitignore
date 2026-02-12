@@ -6,6 +6,7 @@ __pycache__/
 
 sparsh-skin-dataset/*
 dataset/*
+assets/*
 experiments/*
 # C extensions
 *.so

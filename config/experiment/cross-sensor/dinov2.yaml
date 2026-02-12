@@ -1,16 +1,16 @@
 # @package _global_
 defaults:
-  - override /data: tng
-  - override /algorithm: tng_dinov2
+  - override /data: cross_sensor
+  - override /algorithm: cross_sensor_dinov2
   - _self_
 
 model_size: tiny
-experiment_name: dinov2_tng_${model_size}
+experiment_name: dinov2_cross_sensor_${model_size}
 ckpt_path: ./
 
 wandb:
   entity: ryk012
-  project: tng_dinov2
+  project: cross_sensor_dinov2
   group: dino_xela${model_size}
   tags: ["xela${model_size}"]
 
@@ -21,7 +21,4 @@ trainer:
 algorithm:
   centering: centering
   encoder:
-    _target_: tactile_ssl.model.xela_${model_size}
-    input_type: "image"
-    patch_size: 8
-    in_dim: 64 # 8x8 patches
+    _target_: tactile_ssl.model.cross_sensor_${model_size}
