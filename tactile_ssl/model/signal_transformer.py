@@ -148,6 +148,7 @@ class SignalTransformer(nn.Module):
     def apply_tubelet_masks(self, x, masks, concat=True):
         all_x = []
         _, t, _, c = x.shape
+        # print(x.shape, masks.shape)
         for mask in masks:
             mask_keep = einops.repeat(mask, "b n -> b t n c", c=c, t=t)
             masked_x = torch.gather(x, dim=-2, index=mask_keep)
@@ -212,6 +213,8 @@ class SignalTransformer(nn.Module):
 
         pos_embed = einops.rearrange(pos_embed, "1 (t n) c -> 1 t n c", n=n)
         x = x + pos_embed[:, :t]
+        # print(x.shape, masks.shape)
+
         if masks is not None:
             if mask_type == "tubelet":
                 x = self.apply_tubelet_masks(x, masks)
@@ -265,6 +268,7 @@ class SignalTransformer(nn.Module):
         masktoken_masks: Optional[List[torch.Tensor]] = None,
     ):
         x = self.pre_embed(x)
+
         x, bias = self.prepare_tokens_with_mask(x, masks, mask_type, masktoken_masks)
         
         x_prenorm, x_postnorm = self.transform(x, bias)

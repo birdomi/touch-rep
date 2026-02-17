@@ -25,7 +25,6 @@ from tactile_ssl.utils import get_local_rank, get_node_id
 from tactile_ssl.utils.logging import get_pylogger, print_config_tree  # noqa: E402
 from tactile_ssl.data.d360.utils import get_weights, get_experiment_name, get_modality_tag
 from tactile_ssl.utils.combined_dataset import CombinedDataset
-from tactile_ssl.data.cross_sensor_dataset import CrossSensorDatasetWrapper
 
 logger = get_pylogger(__name__)
 
@@ -120,35 +119,18 @@ def get_dataloaders_magnetic_based(cfg: DictConfig):
 
         for dataset in train_datasets + val_datasets:
             dataset.update_normalization(xela_mean, xela_std)
-
-        mean_as_list = xela_mean.tolist()
-        std_as_list = xela_std.tolist()
-        
-        # Attach stats to the returned dataset object for easier retrieval
         train_dset = data.ConcatDataset(train_datasets)
-        train_dset.sensor_mean = mean_as_list
-        train_dset.sensor_std = std_as_list
-        
         val_dset = data.ConcatDataset(val_datasets)
-        val_dset.sensor_mean = mean_as_list
-        val_dset.sensor_std = std_as_list
 
     elif data_cfg.sensor == "tdex":
         dataset = hydra.utils.instantiate(data_cfg.dataset)
         train_dset_size = int(len(dataset) * cfg.data.train_val_split)
 
         train_dset, val_dset = data.random_split(dataset, [train_dset_size, len(dataset) - train_dset_size])
-        
-        # Default stats for Tdex
-        train_dset.sensor_mean = [0.0] * 3 
-        train_dset.sensor_std = [1.0] * 3
-        if val_dset:
-            val_dset.sensor_mean = [0.0] * 3
-            val_dset.sensor_std = [1.0] * 3
     else:
         raise NotImplementedError
 
-    return train_dset, val_dset, mean_as_list, std_as_list 
+    return train_dset, val_dset
 
 
 def get_dataloaders_d360_based(cfg: DictConfig):
@@ -316,6 +298,7 @@ def get_dataloaders_gelsight_based(cfg: DictConfig):
     return train_dset, val_dset
 
 
+
 def get_dataloaders_actionsense_based(cfg: DictConfig):
     data_cfg = cfg.data
     dataset_list = data_cfg.dataset_list
@@ -339,16 +322,20 @@ def get_dataloaders_actionsense_based(cfg: DictConfig):
     print(f"Loading {len(sequences)} sequences from {data_path}")
 
     # Instantiate dataset with all sequences
+    # dataset_config is e.g. tactile_ssl.data.actionsense_tactile.ActionSenseSSLDataset
+    # The config inside dataset_config.config is passed to __init__
     ds = hydra.utils.instantiate(
         dataset_config,
         sequences=sequences,
         data_path=data_path
     )
 
-    # Calculate class weights
+    # Calculate class weights for classification probe (if needed)
+    # ActionSenseSSLDataset has object_classes array
     object_classes = sequences
     object_class_sizes = np.zeros(len(sequences))
     
+    # ds.object_classes contains class_id for each frame
     unique, counts = np.unique(ds.object_classes, return_counts=True)
     for class_id, count in zip(unique, counts):
         object_class_sizes[int(class_id)] = count
@@ -373,12 +360,15 @@ def get_dataloaders_actionsense_based(cfg: DictConfig):
     val_size = len(ds) - train_size
     train_dset, val_dset = data.random_split(ds, [train_size, val_size])
     
-    # Set normalization
+    # Set default normalization if not present (ActionSense might not strictly need it if not using ImageNet pretraining on images)
+    # But if we use images later, we might. For now, we can leave it or set placeholder.
     if cfg.data.normalization.mean is None:
         print("Calculating normalization statistics from data (excluding 0)...")
         data_arr = ds.sensor_data
         
         # Determine channel dim
+        # Heuristic: if last dim is small (<=25) or matches in_chans (if we knew it), assume it's C.
+        # Otherwise assume (N, C, H, W) -> dim 1.
         channel_dim = -1
         if data_arr.shape[-1] <= 25: 
              channel_dim = -1
@@ -392,62 +382,29 @@ def get_dataloaders_actionsense_based(cfg: DictConfig):
              data_arr_perm = data_arr
              
         C = data_arr_perm.shape[-1]
+        mean = []
+        std = []
         
-        # Calculate unified stats across all channels
-        all_valid_data = []
         for c in range(C):
             channel_data = data_arr_perm[..., c]
             valid_mask = channel_data != 0
             valid_data = channel_data[valid_mask]
+            
             if valid_data.size > 0:
-                all_valid_data.append(valid_data)
+                mean.append(float(np.mean(valid_data)))
+                std.append(float(np.std(valid_data)))
+            else:
+                mean.append(0.0)
+                std.append(1.0)
         
-        if len(all_valid_data) > 0:
-            concatenated_data = np.concatenate(all_valid_data)
-            unified_mean = float(np.mean(concatenated_data))
-            unified_std = float(np.std(concatenated_data))
-        else:
-            unified_mean = 0.0
-            unified_std = 1.0
-            
-        mean = [unified_mean] * C
-        std = [unified_std] * C
-                
-        # Update config and datasets
+        print(f"Computed normalization - Mean: {mean}, Std: {std}")
+        
         with open_dict(cfg):
-            cfg.data.normalization.mean = mean
-            cfg.data.normalization.std = std
-            
-        # For random_split subsets:
-        if hasattr(train_dset, "dataset"):
-             train_dset.dataset.update_normalization(mean, std)
-             if val_dset:
-                  val_dset.dataset.update_normalization(mean, std)
-        elif hasattr(train_dset, "update_normalization"):
-             train_dset.update_normalization(mean, std)
-             if val_dset:
-                  val_dset.update_normalization(mean, std)
-        
-        # Attach to dataset object for cross-sensor retrieval
-        train_dset.sensor_mean = mean
-        train_dset.sensor_std = std
-        if val_dset:
-            val_dset.sensor_mean = mean
-            val_dset.sensor_std = std
-            
-        logger.info(f"Computed and applied UNIFIED ActionSense stats: Mean={unified_mean}, Std={unified_std}")
-        
-    else:
-        # If config already has it, still attach for cross-sensor consistency
-        m = cfg.data.normalization.mean
-        s = cfg.data.normalization.std
-        train_dset.sensor_mean = m
-        train_dset.sensor_std = s
-        if val_dset:
-            val_dset.sensor_mean = m
-            val_dset.sensor_std = s
+             cfg.data.normalization.mean = mean
+             cfg.data.normalization.std = std
 
     return train_dset, val_dset
+
 
 def get_dataloaders_cross_sensor_based(cfg: DictConfig):
     data_cfg = cfg.data
@@ -455,9 +412,6 @@ def get_dataloaders_cross_sensor_based(cfg: DictConfig):
     
     train_datasets = []
     val_datasets = []
-    
-    sensor_means = []
-    sensor_stds = []
     
     for source_config_path in dataset_source_list:
         # Resolve absolute path relative to project root or use hydra to find it
@@ -474,6 +428,11 @@ def get_dataloaders_cross_sensor_based(cfg: DictConfig):
         temp_cfg.data = sensor_cfg
         
         # Dispatch to the appropriate loader based on the sensor type in the loaded config
+        # We use the main get_dataloaders function but need to be careful not to recurse strictly
+        # or just call the specific helper functions based on sensor type.
+        # Calling get_dataloaders(temp_cfg) is cleaner but we need to ensure it returns datasets, not loaders
+        # Actually get_dataloaders returns loaders. We need datasets.
+        # So we should call the specific helper functions.
         
         if "d360" in sensor_cfg.sensor: # d360 config usually has strict structure
              t_dset, v_dset = get_dataloaders_d360_based(temp_cfg)
@@ -485,109 +444,38 @@ def get_dataloaders_cross_sensor_based(cfg: DictConfig):
              t_dset, v_dset = get_dataloaders_actionsense_based(temp_cfg)
         else:
              raise NotImplementedError(f"Sensor type {sensor_cfg.sensor} from {source_config_path} is not supported in cross-sensor loading.")
-
-        # Default values for mean/std
-        mean = [0.0] * data_cfg.max_channels
-        std = [1.0] * data_cfg.max_channels
-
-        if t_dset is not None:
-             # Retrieve pre-computed stats from the loader
-             if hasattr(t_dset, "sensor_mean") and hasattr(t_dset, "sensor_std"):
-                 mean = t_dset.sensor_mean
-                 std = t_dset.sensor_std
-                 logger.info(f"Retrieved stats from dataset object for {source_config_path}: Mean={mean}, Std={std}")
-             else:
-                 # Fallback if not attached (e.g. d360 or gelsight if not updated)
-                 # Check config first
-                 if hasattr(temp_cfg.data, "normalization") and temp_cfg.data.normalization.mean is not None:
-                     m = temp_cfg.data.normalization.mean
-                     s = temp_cfg.data.normalization.std
-                     if isinstance(m, (list, tuple)):
-                         mean = list(m)
-                     if isinstance(s, (list, tuple)):
-                          std = list(s)
-                     logger.info(f"Using config stats for {source_config_path}")
-                 else:
-                     logger.warning(f"No stats found for {source_config_path}. Using identity.")
              
-             sensor_means.append(mean)
-             sensor_stds.append(std)
-
-        else:
-             # Fallback if no train data? Should not happen
-             logger.warning(f"No train data for {source_config_path}. Appending default identity.")
-             sensor_means.append(mean)
-             sensor_stds.append(std)
-
-        # Wrap with CrossSensorDatasetWrapper
-        # Use sensor index in source list as ID (0, 1, ...)
-        sensor_id = dataset_source_list.index(source_config_path)
-        max_taxels=data_cfg.max_taxels
-        max_channels=data_cfg.max_channels
-
         if t_dset is not None:
-            t_dset_wrapped = CrossSensorDatasetWrapper(t_dset, sensor_id=sensor_id, max_taxels=max_taxels, max_channels=max_channels)
-            train_datasets.append(t_dset_wrapped)
+            train_datasets.append(t_dset)
         if v_dset is not None:
-            v_dset_wrapped = CrossSensorDatasetWrapper(v_dset, sensor_id=sensor_id, max_taxels=max_taxels, max_channels=max_channels)
-            val_datasets.append(v_dset_wrapped)
+            val_datasets.append(v_dset)
 
     if not train_datasets:
         raise ValueError("No training datasets loaded from source list.")
-        
+
+    # Combine all datasets
+    # Note: This assumes all datasets return compatible items (dictionaries with same keys/shapes or handled by collate_fn)
+    # The CrossSensorDinoV2 algorithm likely expects a dictionary with specific keys.
+    # We might need a custom ConcatDataset if we need to track which dataset an item came from, 
+    # but torch.utils.data.ConcatDataset is usually sufficient if indices aren't needed.
+    
     combined_train_dset = data.ConcatDataset(train_datasets)
     combined_val_dset = data.ConcatDataset(val_datasets) if val_datasets else None
     
-    train_sampler = None
-    if "sampling_ratios" in data_cfg and data_cfg.sampling_ratios is not None:
-        sampling_ratios = data_cfg.sampling_ratios
-        if len(sampling_ratios) != len(train_datasets):
-            print(f"Warning: sampling_ratios length {len(sampling_ratios)} does not match number of datasets {len(train_datasets)}. Using default sampling.")
-        else:
-            print(f"Using sampling ratios: {sampling_ratios}")
-            weights = []
-            for idx, dset in enumerate(train_datasets):
-                d_len = len(dset)
-                if d_len > 0:
-                    # Weight per sample = target_ratio / dataset_size
-                    # We normalize so sum(ratios) = 1 (or close to it)
-                    w = sampling_ratios[idx] / d_len
-                    weights.extend([w] * d_len)
-                else:
-                    print(f"Warning: Dataset {idx} has 0 length.")
-            
-            if weights:
-                weights = torch.tensor(weights, dtype=torch.double)
-                # Replacement=True by default for WeightedRandomSampler
-                # num_samples can be sum of lengths or custom
-                train_sampler = data.WeightedRandomSampler(weights, len(weights))
-
-    return combined_train_dset, combined_val_dset, train_sampler, sensor_means, sensor_stds
+    return combined_train_dset, combined_val_dset
 
 def get_dataloaders(cfg: DictConfig):
-    train_sampler = None
     if "d360" in cfg.data.sensor:
         train_dset, val_dset = get_dataloaders_d360_based(cfg)
     elif cfg.data.sensor in ["xela", "tdex"]:
-        train_dset, val_dset, sensor_means, sensor_stds = get_dataloaders_magnetic_based(cfg)
+        train_dset, val_dset = get_dataloaders_magnetic_based(cfg)
     elif cfg.data.sensor == "gelsight":
         train_dset, val_dset = get_dataloaders_gelsight_based(cfg)
     elif cfg.data.sensor == "actionsense":
         train_dset, val_dset = get_dataloaders_actionsense_based(cfg)
-    elif cfg.data.sensor == "cross_sensor":
-        train_dset, val_dset, train_sampler, sensor_means, sensor_stds = get_dataloaders_cross_sensor_based(cfg)
-    else:
-        sensor_means, sensor_stds = None, None
-    
-    loader_args = dict(cfg.data.train_dataloader)
-    if train_sampler is not None:
-        print("Using WeightedRandomSampler for training dataloader.")
-        loader_args['shuffle'] = False
-        loader_args['sampler'] = train_sampler
-    
-    train_dataloader = data.DataLoader(train_dset, **loader_args)
+    train_dataloader = data.DataLoader(train_dset, **cfg.data.train_dataloader)
     val_dataloader = data.DataLoader(val_dset, **cfg.data.val_dataloader)
-    return train_dataloader, val_dataloader, sensor_means, sensor_stds
+    return train_dataloader, val_dataloader
 
 def attempt_resume(cfg: DictConfig):
     ckpt_path = None
@@ -641,13 +529,7 @@ def train(cfg: DictConfig):
     else:
         sensors_type = [cfg.data.sensor[i].type for i in range(n_sensors)] if n_sensors > 1 else cfg.data.sensor
     logger.info(f"Instantiating dataset & dataloaders for <{sensors_type}>")
-    train_dataloader, val_dataloader, sensor_means, sensor_stds = get_dataloaders(cfg)
-
-    # Inject sensor normalization stats into algorithm config if available
-    if sensor_means is not None and sensor_stds is not None:
-        with open_dict(cfg):
-            # Also inject into encoder config so it's passed during instantiation
-            cfg.algorithm.encoder.normalization = {"mean": sensor_means, "std": sensor_stds}
+    train_dataloader, val_dataloader = get_dataloaders(cfg)
 
     trainer = Trainer(wandb_logger=wandb, **cfg.trainer)
 

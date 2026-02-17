@@ -38,7 +38,7 @@ data_cfg["paths"] = {'data_root': "./dataset"}
 # data_cfg["data"] = {'window_time': 0.1, 'window_overlap': 0.0, 'interpolating_freq':100} 
 
 def get_dataloaders_gelsight_based(cfg: DictConfig):
-    data_cfg = cfg
+    data_cfg = cfg.data
     dataset_list = data_cfg.dataset_list
     
     # Extract sequences from all dataset items
@@ -88,8 +88,8 @@ def get_dataloaders_gelsight_based(cfg: DictConfig):
     # print(f"Object class weights: {object_class_weights}")
 
     with open_dict(cfg):
-        cfg.object_classes = object_classes
-        cfg.object_class_weights = object_class_weights.tolist()
+        cfg.data.object_classes = object_classes
+        cfg.data.object_class_weights = object_class_weights.tolist()
 
     # Split
     # Default to 90/10 split if not specified
@@ -99,9 +99,9 @@ def get_dataloaders_gelsight_based(cfg: DictConfig):
     train_dset, val_dset = data.random_split(ds, [train_size, val_size])
     
     # Set default normalization if not present
-    if cfg.get('normalization', None) is not None and cfg.normalization.mean is None:
-        cfg.normalization.mean = [0.485, 0.456, 0.406]
-        cfg.normalization.std = [0.229, 0.224, 0.225]
+    if cfg.data.normalization.mean is None:
+        cfg.data.normalization.mean = [0.485, 0.456, 0.406]
+        cfg.data.normalization.std = [0.229, 0.224, 0.225]
 
     return train_dset, val_dset
 
@@ -116,7 +116,10 @@ def main():
     data_cfg_ = OmegaConf.create(data_cfg)
     num_classes = len(data_cfg_.dataset_list[0].sequence_list)
     print(num_classes)
-    train_dset, val_dset = get_dataloaders_gelsight_based(data_cfg_)
+
+    # Wrap data config to match train.py expectation (cfg.data)
+    full_cfg = OmegaConf.create({'data': data_cfg_})
+    train_dset, val_dset = get_dataloaders_gelsight_based(full_cfg)
     train_loader = data.DataLoader(train_dset, batch_size=64, shuffle=True)
     val_loader = data.DataLoader(val_dset, batch_size=64, shuffle=False)
 

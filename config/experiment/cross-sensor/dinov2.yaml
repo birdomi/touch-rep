@@ -4,6 +4,7 @@ defaults:
   - override /algorithm: cross_sensor_dinov2
   - _self_
 
+num_sensor: 2
 model_size: tiny
 experiment_name: dinov2_cross_sensor_${model_size}
 ckpt_path: ./
@@ -18,7 +19,10 @@ trainer:
   max_epochs: 100
   validation_frequency: 5
 
+data:
+  num_sensor: ${num_sensor}
 algorithm:
   centering: centering
+  num_sensor: ${num_sensor}
   encoder:
     _target_: tactile_ssl.model.cross_sensor_${model_size}

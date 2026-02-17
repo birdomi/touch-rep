@@ -6,3 +6,4 @@ from .d360_dino import D360DINOModule  # noqa F401
 from .xela_dinov2 import XelaDINOv2Module  # noqa F401
 from .xela_mae import XelaMAEModule  # noqa F402
 from .xela_pos_dinov2 import XelaDINOv2PosModule  # noqa F403
+from .cross_sensor_dinov2 import CrossSensorDINOv2Module  # noqa F404

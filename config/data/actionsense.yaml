@@ -1,0 +1,56 @@
+train_dataloader:
+  batch_size: 64
+  num_workers: 8
+  shuffle: True
+  drop_last: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 8
+  shuffle: True
+  drop_last: True
+  pin_memory: True
+  persistent_workers: True
+
+normalization:
+  mean: null # This will be populated in train.py during data loading and stored in model state_dict
+  std: null # This will be populated in train.py during data loading and stored in model state_dict
+object_classes: null
+object_class_weights: null
+
+sensor: actionsense
+dataset_list:
+  - type: human
+    sequence_list:
+      - 'Clean_a_pan_with_a_sponge'
+      - 'Clean_a_pan_with_a_towel'
+      - 'Clean_a_plate_with_a_sponge'
+      - 'Clean_a_plate_with_a_towel'
+      - 'Clear_cutting_board'
+      - 'Get_items_from_cabinets__3_each_large_small_plates'
+      - 'Get_items_from_refrigerator_cabinets_drawers'
+      - 'Get_replace_items_from_refrigerator_cabinets_drawe'
+      - 'Load_dishwasher__3_each_large_small_plates_bowls_m'
+      - 'Open_a_jar_of_almond_butter'
+      - 'Open_close_a_jar_of_almond_butter'
+      - 'Peel_a_cucumber'
+      - 'Peel_a_potato'
+      - 'Pour_water_from_a_pitcher_into_a_glass'
+      - 'Set_table__3_each_large_small_plates_bowls_mugs_gl'
+      - 'Slice_a_cucumber'
+      - 'Slice_a_potato'
+      - 'Slice_bread'
+      - 'Spread_almond_butter_on_a_bread_slice'
+      - 'Spread_jelly_on_a_bread_slice'
+      - 'Stack_on_table__3_each_large_small_plates_bowls'
+      - 'Unload_dishwasher__3_each_large_small_plates_bowls'
+
+    dataset:
+      _target_: tactile_ssl.data.actionsense_tactile.ActionSenseSSLDataset
+      config:
+        bias_noise_std: 0
+        bias_range: 0
+      data_path: ${paths.data_root}/action_sense
+  

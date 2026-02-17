@@ -35,7 +35,12 @@ class OnlineProbeModule(nn.Module):
         x = self.decoder(z, **kwargs)
         return x
 
-    def forward(self, embedding: torch.Tensor, target: torch.Tensor, **kwargs) -> Dict:
+    def forward(self, embedding: torch.Tensor, target: torch.Tensor, sensor_wise=False, **kwargs) -> Dict:
         prediction = self.forward_decoder(embedding, **kwargs)
-        loss = self.loss_fn(prediction, target)
+        loss = 0
+        if sensor_wise:
+            for idx, pred in enumerate(prediction):
+                loss += self.loss_fn(pred, target[idx])
+        else:
+            loss = self.loss_fn(prediction, target)
         return loss, prediction

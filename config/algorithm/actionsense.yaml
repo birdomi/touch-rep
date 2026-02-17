@@ -1,10 +1,10 @@
 _target_: tactile_ssl.algorithm.CrossSensorDINOv2Module
 encoder:
   _target_: tactile_ssl.model.CrossSensorTransformer
-  in_dim: 368 # total number of xela sensors in hand
-  in_chans: 30 # 3 xela mag channels + 3 position channels
-  sequence_length: 1 # max sequence length
-  time_chunk_size: 1 # max time_chunk_size
+  in_dim: 40 # total number of xela sensors in hand
+  in_chans: 25 # 3 xela mag channels + 3 position channels
+  sequence_length: 1
+  time_chunk_size: 1
   num_register_tokens: 1
   pos_embed_fn: learned
   with_masktoken: True
@@ -54,7 +54,7 @@ online_probes:
   - _target_: tactile_ssl.probe.OnlineProbeModule
     probe_name: "reconstruction"
     decoder:
-      _target_: tactile_ssl.probe.cross_sensor_reconstruction.CrossSensorSignalDecoderBase
+      _target_: tactile_ssl.probe.reconstruction.SignalDecoderBase
       in_dim: ${algorithm.encoder.in_dim}
       in_chans: ${algorithm.encoder.in_chans}
       sequence_length: ${algorithm.encoder.sequence_length}

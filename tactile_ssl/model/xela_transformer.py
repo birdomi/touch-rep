@@ -158,7 +158,7 @@ class XelaTransformer(SignalTransformer):
             # Add time dimension t=1 to match (B, t, n, c) expectation
             x = x.unsqueeze(1) # (B, 1, L, Embed)
             return x
-
+        
         x = einops.rearrange(x, "b t n c -> (b n) c t")
 
         sensor_embed = self.patch_embed(x)

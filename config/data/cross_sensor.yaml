@@ -17,45 +17,12 @@ val_dataloader:
 normalization:
   mean: null # This will be populated in train.py during data loading and stored in model state_dict
   std: null # This will be populated in train.py during data loading and stored in model state_dict
-object_classes: null
-object_class_weights: null
 
-window_time: 0.1 # default 0.01 
-window_overlap: 0.0
-interpolating_freq: 100
+max_channels: 30
+max_taxels: 368
 
-sensor: xela
-dataset_list:
-  - type: teleop
-    sequence_list:
-      - corn
-      - rubikscube
-      - metalcup
-      - cup
-      - ball
-      - drill
-      - mustard
-      - lego
-      - pringle
-      - legopool
-      - watermelon
-      - popcorn
-      - loofah
-      - slipper
-    train_dataset_ids: [0] #1, 2, 3, 4, 5, 6, 7, 8]
-    val_dataset_ids: [9]
-
-    dataset:
-      _target_: tactile_ssl.data.xela_tactile.XelaSSLDataset
-      config:
-        window_time: ${data.window_time}
-        window_overlap: ${data.window_overlap}
-        interpolating_freq: ${data.interpolating_freq}
-        subtract_baseline: True
-        smooth_data: False
-        bias_noise_std: 0
-        bias_range: 0
-      data_path: ${paths.data_root}/sparsh-skin-dataset/pretraining/
-      baseline_signal_path: ${paths.data_root}/sparsh-skin-dataset/pretraining/baseline/xela/data.pkl
-      xela_urdf_path: ${paths.data_root}/sparsh-skin-dataset/pretraining/urdf/ahrcpcpn.urdf
-      load_images: False
+sensor: cross_sensor
+sampling_ratios: [0.5, 0.5] # Ratio for each dataset in the list (must sum to ~1.0, or will be normalized). Set to null for natural concatenation.
+dataset_source_list:
+  - config/data/xela.yaml
+  - config/data/actionsense.yaml
