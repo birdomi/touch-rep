@@ -148,7 +148,7 @@ def get_dataloaders_magnetic_based(cfg: DictConfig):
     else:
         raise NotImplementedError
 
-    return train_dset, val_dset, mean_as_list, std_as_list 
+    return train_dset, val_dset#, mean_as_list, std_as_list 
 
 
 def get_dataloaders_d360_based(cfg: DictConfig):
@@ -569,7 +569,8 @@ def get_dataloaders(cfg: DictConfig):
     if "d360" in cfg.data.sensor:
         train_dset, val_dset = get_dataloaders_d360_based(cfg)
     elif cfg.data.sensor in ["xela", "tdex"]:
-        train_dset, val_dset, sensor_means, sensor_stds = get_dataloaders_magnetic_based(cfg)
+        train_dset, val_dset= get_dataloaders_magnetic_based(cfg)
+        sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
     elif cfg.data.sensor == "gelsight":
         train_dset, val_dset = get_dataloaders_gelsight_based(cfg)
     elif cfg.data.sensor == "actionsense":
@@ -653,6 +654,7 @@ def train(cfg: DictConfig):
 
     logger.info(f"Instantiating algorithm <{cfg.algorithm._target_}>")
     algorithm = hydra.utils.instantiate(cfg.algorithm)
+
 
     trainer.fit(algorithm, train_dataloader, val_dataloader, ckpt_path=cfg.ckpt_path)
 

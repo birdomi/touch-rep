@@ -63,8 +63,17 @@ class CrossSensorDINOv2Module(DINOv2Module):
                     )
                 # in_dims corresponds to num sensors
                 print(X_pred.shape)
-                X_pred = einops.rearrange(X_pred, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=encoder.in_chans)
+                # X_pred is likely just Xela (3 channels) based on training_step logic
+                if X_pred.shape[-1] == 3:
+                     # Already in Xela format, just add dim for consistency if needed, or skip rearrange
+                     X_pred = X_pred.unsqueeze(-2) # (b, t, n, 1, 3)
+                else:
+                     X_pred = einops.rearrange(X_pred, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=encoder.in_chans)
+                
+                # X_orig is full sensor input (padded), so we rearrange it
                 X_orig = einops.rearrange(X_orig, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=encoder.in_chans)
+                
+                # Take first channel/component (Xela) for visualization
                 X_pred = X_pred[0].cpu().numpy()[..., 0, :3]
                 X_orig = X_orig[0].cpu().numpy()[..., 0, :3]
                 xela_mean = self.teacher_encoder_dict["backbone"].xela_mean.detach().cpu().numpy()
