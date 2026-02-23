@@ -16,8 +16,8 @@ wandb:
   tags: ["xela${model_size}"]
 
 trainer:
-  max_epochs: 100
-  validation_frequency: 5
+  max_epochs: 500
+  validation_frequency: 20
 
 data:
   num_sensor: ${num_sensor}
