@@ -82,8 +82,8 @@ class CrossSensorTransformer(SignalTransformer):
         time_chunk_size: int,
         sequence_length: int,
         embed_dim: int,
-        depth: int = 12,
-        num_heads: int = 12,
+        depth: int = 8,
+        num_heads: int = 3,
         mlp_ratio: float = 4.0,
         ffn_layer: str = "mlp",
         qkv_bias: bool = True,
@@ -94,7 +94,7 @@ class CrossSensorTransformer(SignalTransformer):
         norm_layer: Callable[..., nn.Module] = partial(nn.LayerNorm, eps=1e-6),
         pos_embed_fn: Literal["sinusoidal", "learned"] = "learned",
         init_values: Optional[float] = None,
-        num_register_tokens: int = 0,
+        num_register_tokens: int = 1,
         drop_path_rate: float = 0.0,
         drop_path_uniform: bool = False,
         with_masktoken: bool = False,
@@ -168,6 +168,33 @@ class CrossSensorTransformer(SignalTransformer):
                 self.embed_dim,
             )
         )
+
+        self.sensor_block = nn.ModuleList([
+            nn.ModuleList([
+                Block(
+                    attn_class=MemEffAttention,
+                    dim=embed_dim,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    proj_bias=proj_bias,
+                    ffn_bias=ffn_bias,
+                    drop_path=0.0,
+                    norm_layer=norm_layer,
+                    act_layer=act_layer,
+                    ffn_layer=Mlp,
+                    init_values=init_values,
+                )
+                for _ in range(self.pre_fusion_block_idx)
+            ])
+            for _ in range(self.num_sensors)
+        ])
+        self.sensor_norm = norm_layer(embed_dim)
+
+        if hasattr(self, 'blocks'):
+            self.fusion_block = self.blocks[:self.pre_fusion_block_idx]
+
+
         if normalization is not None:
             means = normalization.mean
             stds = normalization.std
@@ -249,6 +276,23 @@ class CrossSensorTransformer(SignalTransformer):
             x_norm = torch.cat([zero_tokens, x_norm], dim=1)
         return x, x_norm
 
+    def apply_tubelet_masks(self, x, masks, sensor_idx = None, concat=True):
+        all_x = []
+        all_idx = []
+        _, t, _, c = x.shape
+        # print(x.shape, masks.shape)
+        for mask in masks:
+            mask_keep = einops.repeat(mask, "b n -> b t n c", c=c, t=t)
+            masked_x = torch.gather(x, dim=-2, index=mask_keep)
+            all_x.append(masked_x)
+            if sensor_idx is not None:
+                all_idx.append(sensor_idx)
+        if not concat:
+            return all_x, all_idx
+        if sensor_idx is None:
+            return torch.cat(all_x, dim=0)
+        return torch.cat(all_x, dim=0), torch.cat(all_idx, dim=0)
+
     def prepare_tokens_with_mask(
         self,
         x,
@@ -269,9 +313,9 @@ class CrossSensorTransformer(SignalTransformer):
 
         if masks is not None:
             if mask_type == "tubelet":
-                x = self.apply_tubelet_masks(x, masks)
+                x, sensor_ids = self.apply_tubelet_masks(x, masks, sensor_ids)
             elif mask_type == "block":
-                x = self.apply_block_masks(x, masks)
+                x, sensor_ids = self.apply_block_masks(x, masks, sensor_ids)
         if self.causal:
             attn_bias = self.create_causal_mask(x)
         else:
@@ -279,12 +323,12 @@ class CrossSensorTransformer(SignalTransformer):
 
         if masktoken_masks is not None:
             x = self.apply_masktokens(x, masktoken_masks)
-
         x = einops.rearrange(x, "b t n c -> b (t n) c")
+
         if self.register_tokens is not None:
             x = torch.cat([self.register_tokens.expand(x.shape[0], -1, -1), x], dim=1)
         # print(x.shape)
-        return x, attn_bias
+        return x, attn_bias, sensor_ids
 
     def prepare_tokens_with_mask_pos(
         self,
@@ -350,11 +394,24 @@ class CrossSensorTransformer(SignalTransformer):
 
         return attn_bias
 
+    def sensor_transform(self, x, sensor_ids, bias):
+        out = torch.zeros_like(x)
+        ids = sensor_ids.unique()
+        for sensor_id in ids:
+            mask = sensor_ids == sensor_id
+            curr_x = x[mask]
+            
+            for blk in self.sensor_block[sensor_id]:
+                curr_x = blk(curr_x, bias)
+                
+            out[mask] = curr_x
+        out_norm = self.sensor_norm(out)
+        return out, out_norm
+
     def transform(self, x, x_pos, bias):
+        x = x + x_pos
         for i, blk in enumerate(self.blocks):
             x = blk(x, bias)
-            if i == self.pre_fusion_block_idx:
-                x = x + x_pos
         x_norm = self.norm(x)
         return x, x_norm
     
@@ -367,12 +424,12 @@ class CrossSensorTransformer(SignalTransformer):
         mask_type: Optional[Literal["block", "tubelet"]] = None,
         masktoken_masks: Optional[List[torch.Tensor]] = None,
     ):
-        # print(masks.shape, mask_type, masktoken_masks.shape)
         x = self.pre_embed(x, sensor_ids=sensor_ids)
-        x, bias = self.prepare_tokens_with_mask(x, sensor_ids, masks, mask_type, masktoken_masks)
+        x, bias, sensor_ids = self.prepare_tokens_with_mask(x, sensor_ids, masks, mask_type, masktoken_masks)
         pos, pos_bias = self.prepare_tokens_with_mask_pos(pos, masks, mask_type, masktoken_masks)
         pos, pos_norm = self.pos_transform(pos, pos_bias)
-        x_prenorm, x_postnorm = self.transform(x, pos_norm, bias)
+        sen, sen_norm = self.sensor_transform(x, sensor_ids, bias)
+        x_prenorm, x_postnorm = self.transform(sen, pos_norm, bias)
 
         reg_tokens = x_postnorm[:, : self.num_register_tokens]
         patch_tokens = x_postnorm[:, self.num_register_tokens :]
@@ -393,7 +450,7 @@ def cross_sensor_tiny(
     in_chans: int,
     sequence_length,
     depth=8,
-    num_register_tokens=0,
+    num_register_tokens=1,
     time_chunk_size=5,
     **kwargs,
 ):
