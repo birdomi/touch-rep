@@ -82,8 +82,8 @@ class CrossSensorTransformer(SignalTransformer):
         time_chunk_size: int,
         sequence_length: int,
         embed_dim: int,
-        depth: int = 12,
-        num_heads: int = 12,
+        depth: int = 8,
+        num_heads: int = 3,
         mlp_ratio: float = 4.0,
         ffn_layer: str = "mlp",
         qkv_bias: bool = True,
@@ -172,7 +172,6 @@ class CrossSensorTransformer(SignalTransformer):
             means = normalization.mean
             stds = normalization.std
 
-            # shape (num_sensor, 1, in_dim, in_chans)
             means_tensor = torch.zeros(self.num_sensors, 1, self.in_dim, self.in_chans)
             stds_tensor = torch.ones(self.num_sensors, 1, self.in_dim, self.in_chans)
 
@@ -208,6 +207,7 @@ class CrossSensorTransformer(SignalTransformer):
         if hasattr(self, "xela_mean") and hasattr(self, "xela_std"):
             # x: (B, T, N, C_total)
             x = einops.rearrange(x, "b t n (k c) -> b t n k c", c=self.in_chans)
+            # print(x.shape)
             
             if sensor_ids is not None:
                 # self.xela_mean: (S, 1, N, C)
@@ -218,6 +218,8 @@ class CrossSensorTransformer(SignalTransformer):
                 # Reshape for broadcasting with (B, T, N, K, C)
                 target_means = target_means.unsqueeze(-2) # (B, 1, N, 1, C)
                 target_stds = target_stds.unsqueeze(-2)   # (B, 1, N, 1, C)
+                # print(target_means.shape, target_stds.shape)
+                # print(target_means[:,:,:,:,:6])
                 
                 x = (x - target_means) / target_stds
             else:

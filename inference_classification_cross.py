@@ -19,6 +19,7 @@ import yaml
 import hydra
 
 from tactile_ssl.utils.logging import get_pylogger, print_config_tree  # noqa: E402
+from train import get_dataloaders_cross_sensor_based
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,90 +29,15 @@ logging.basicConfig(
 
 logger = get_pylogger(__name__)
 
-config = "config/encoder/xela_sparshskin.yaml"
-data_path = "config/data/xela.yaml"
-# ckpt_path = "experiments/dinov2_xela_tiny/2026.01.28-17-59/checkpoints/epoch-0050.ckpt"
-ckpt_path = "experiments/dinov2_xela_no_cls_tiny/2026.02.19-12-31/checkpoints/epoch-0100.ckpt"
-
+config = "config/encoder/cross_sensor_encoder.yaml"
+data_path = "config/data/cross_sensor_eval.yaml"
+ckpt_path = "experiments/dinov2_cross_sensor_tiny/2026.02.18-19-28/checkpoints/epoch-0100.ckpt"
 
 with open(data_path, "r") as f:
     data_cfg = yaml.safe_load(f)
 data_cfg["paths"] = {'data_root': "./dataset"}
 data_cfg["data"] = {'window_time': 0.1, 'window_overlap': 0.0, 'interpolating_freq':100} 
 
-def get_dataloaders_magnetic_based(cfg: DictConfig):
-    data_cfg = cfg
-
-    def get_xela_dataset(dataset_cfg: DictConfig, dataset_name: str, d_id: int, object_class):
-        data_path = f"{dataset_cfg.data_path}"
-        data_files = os.listdir(data_path)
-        dataset_name_exists = True in [f in f"{dataset_name}" for f in data_files]
-        if not dataset_name_exists:
-            print(f"Dataset {dataset_name} not found")
-            return None
-        dataset = hydra.utils.instantiate(
-            dataset_cfg,
-            data_path=f"{data_path}/{dataset_name}/{d_id}",
-            object_class=object_class,
-        )
-        return dataset
-
-    train_datasets, val_datasets = [], []
-    dataset_list: List = data_cfg.dataset_list
-    object_classes = []
-    object_class_sizes = []
-    for dataset_l in dataset_list:
-        if dataset_l.type == "teleop":
-            train_dataset_ids, val_dataset_ids = (
-                dataset_l.train_dataset_ids,
-                dataset_l.val_dataset_ids,
-            )
-            for obj in dataset_l.sequence_list:
-                object_classes.append(obj)
-                object_class_sizes.append(0)
-                for d_id in train_dataset_ids:
-                    dataset = get_xela_dataset(
-                        dataset_l.dataset, dataset_name=obj, d_id=d_id, object_class=len(object_classes) - 1
-                    )
-                    if dataset is not None:
-                        object_class_sizes[-1] += len(dataset)
-                    train_datasets.append(dataset)
-                for d_id in val_dataset_ids:
-                    val_datasets.append(
-                        get_xela_dataset(
-                            dataset_l.dataset, dataset_name=obj, d_id=d_id, object_class=len(object_classes) - 1
-                        )
-                    )
-        elif dataset_l.type == "joystick_control":
-            with open_dict(dataset_l.dataset.config):
-                dataset_l.dataset.config.object_label = len(object_classes)
-            train_dset, val_dset = hydra.utils.instantiate(dataset_l.dataset)
-            object_classes.append("joystick")
-            object_class_sizes.append(len(train_dset))
-            train_datasets.append(train_dset)
-            val_datasets.append(val_dset)
-
-    print(f"Object class sizes: {object_class_sizes}")
-    object_class_ratios = object_class_sizes / np.sum(object_class_sizes)
-    object_class_weights = 1 / object_class_ratios
-    object_class_weights = object_class_weights / np.sum(object_class_weights)
-    print(f"Object class weights: {object_class_weights}")
-
-    from tactile_ssl.data.xela.utils import compute_xela_normalization
-
-    xela_mean, xela_std = compute_xela_normalization(train_datasets)
-    # print('##', xela_mean, xela_std)
-    logger.info(f"Compute Xela normalization: mean={xela_mean}, std={xela_std}")
-
-
-    for dataset in train_datasets + val_datasets:
-        dataset.update_normalization(xela_mean, xela_std)
-    train_dset = data.ConcatDataset(train_datasets)
-    val_dset = data.ConcatDataset(val_datasets)
-
-    train_dataloader = data.DataLoader(train_dset, **data_cfg.train_dataloader)
-    val_dataloader = data.DataLoader(val_dset, **data_cfg.val_dataloader)
-    return train_dataloader, val_dataloader, (xela_mean, xela_std)
 
 def main():
     # Setup device
@@ -122,14 +48,25 @@ def main():
 
 
     data_cfg_ = OmegaConf.create(data_cfg)
-    num_classes = len(data_cfg_.dataset_list[0].sequence_list)
-    train_loader, val_loader, (xela_mean, xela_std) = get_dataloaders_magnetic_based(data_cfg_)
+    with open(data_cfg_.dataset_source_list[0], "r") as f:
+        dataset1_cfg = yaml.safe_load(f)
+    dataset1_cfg = OmegaConf.create(dataset1_cfg)
+    loader_args = dict(data_cfg_.train_dataloader)
+    num_classes = len(dataset1_cfg.dataset_list[0].sequence_list)
 
+
+    train_dset, val_dset, train_sampler, sensor_means, sensor_stds = get_dataloaders_cross_sensor_based(data_cfg_, is_eval=True)
+    if train_sampler is not None:
+        print("Using WeightedRandomSampler for training dataloader.")
+        loader_args['shuffle'] = False
+        loader_args['sampler'] = train_sampler
+    print('##', loader_args)
+    
+    train_loader = data.DataLoader(train_dset, **loader_args)
+    val_loader = data.DataLoader(val_dset, **data_cfg_.val_dataloader)
 
     # 2. Build Algorithm/Model
     model = build_encoder(config, device=device, mode="eval")
-    model.register_buffer("xela_mean", torch.tensor(xela_mean))
-    model.register_buffer("xela_std", torch.tensor(xela_std))
     model.to(device).float()
     model.eval()
 
@@ -145,7 +82,10 @@ def main():
         state_dict = checkpoint
         if "model" in checkpoint:
             state_dict = checkpoint["model"]
-        # print(state_dict.keys())
+        print(state_dict.keys())
+        # print(state_dict['teacher_encoder.backbone.xela_mean'].shape)
+        # print(state_dict['student_encoder.backbone.xela_mean'])
+
 
         # classifier_state_dict = {
         #     'weight': state_dict['online_probes.1.decoder.probe.0.weight'],
@@ -160,13 +100,11 @@ def main():
         for k, v in state_dict.items():
             if k.startswith("teacher_encoder.backbone."):
                 k_new = k.replace("teacher_encoder.backbone.", "")
-                new_state_dict[k_new] = v
+                new_state_dict[k_new] = 
         
         state_dict = new_state_dict
-        del state_dict['xela_mean']
-        del state_dict['xela_std']
 
-        model.load_state_dict(state_dict, strict=False)
+        model.load_state_dict(state_dict, strict=True)
     else:
         logger.warning("No checkpoint path provided or path is default './'. Using random weights.")
     # Linear Classifier (Head) 정의
@@ -190,22 +128,25 @@ def main():
         for i, batch in enumerate(train_loader):
             # Move batch to device
             if isinstance(batch, dict):
-                batch = {k: v.to(device, dtype=torch.float32) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+                batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             elif isinstance(batch, list):
-                batch = [v.to(device, dtype=torch.float32) if isinstance(v, torch.Tensor) else v for v in batch]
+                batch = [v.to(device) if isinstance(v, torch.Tensor) else v for v in batch]
             
-            gt = batch['object_classification'].long() # 라벨은 LongTensor여야 함
+            gt = batch['object_classification']
 
             # 1. Extract Features (Frozen Encoder)
             with torch.no_grad():
-                tactile_rep = model.forward_features(batch['sensor'])
+                # print(batch['sensor_ids'])
+                tactile_rep = model.forward_features(batch['sensor'], batch['sensor_poses'], sensor_ids=batch['sensor_ids'])
                 cls_embedding = tactile_rep["x_norm_regtokens"].squeeze(1)
                 # patch_embedding = tactile_rep["x_norm_patchtokens"].mean(1)
                 # Concatenate features
                 features = cls_embedding
+                # print(features.shape)
 
             # 2. Forward Classifier
             outputs = classifier(features)
+            # print(outputs.shape)
             loss = criterion(outputs, gt)
 
             # 3. Backward & Optimize
@@ -235,12 +176,12 @@ def main():
         for batch in val_loader:
             # Move batch
             if isinstance(batch, dict):
-                batch = {k: v.to(device, dtype=torch.float32) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+                batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             
-            gt = batch['object_classification'].long()
+            gt = batch['object_classification']
 
             # Feature Extraction
-            tactile_rep = model.forward_features(batch['sensor'])
+            tactile_rep = model.forward_features(batch['sensor'], batch['sensor_poses'], sensor_ids=batch['sensor_ids'])
             cls_embedding = tactile_rep["x_norm_regtokens"].squeeze(1)
             # patch_embedding = tactile_rep["x_norm_patchtokens"].mean(1)
             # features = torch.cat([cls_embedding, patch_embedding], dim=1)

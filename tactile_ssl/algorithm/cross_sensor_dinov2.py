@@ -62,7 +62,7 @@ class CrossSensorDINOv2Module(DINOv2Module):
                         n=encoder.in_dim,
                     )
                 # in_dims corresponds to num sensors
-                print(X_pred.shape)
+                # print(X_pred.shape)
                 # X_pred is likely just Xela (3 channels) based on training_step logic
                 if X_pred.shape[-1] == 3:
                      # Already in Xela format, just add dim for consistency if needed, or skip rearrange

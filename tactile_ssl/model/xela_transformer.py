@@ -142,6 +142,8 @@ class XelaTransformer(SignalTransformer):
                 # First three channels are the Xela values, rest are sensor positions
                 xela_mean = torch.cat([self.xela_mean, torch.zeros_like(self.xela_mean)], dim=-1)
                 xela_std = torch.cat([self.xela_std, torch.ones_like(self.xela_std)], dim=-1)
+                # print(x.shape, xela_mean.shape, xela_mean)
+
                 x = (x - xela_mean) / xela_std
             else:
                 raise ValueError("Bad number of channels, must be 3 or 6")

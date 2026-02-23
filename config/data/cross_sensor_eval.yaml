@@ -1,0 +1,27 @@
+train_dataloader:
+  batch_size: 64
+  num_workers: 8
+  shuffle: True
+  drop_last: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 8
+  shuffle: True
+  drop_last: True
+  pin_memory: True
+  persistent_workers: True
+
+normalization:
+  mean: null # This will be populated in train.py during data loading and stored in model state_dict
+  std: null # This will be populated in train.py during data loading and stored in model state_dict
+
+max_channels: 30
+max_taxels: 368
+
+sensor: cross_sensor
+sampling_ratios: [1.0] # Ratio for each dataset in the list (must sum to ~1.0, or will be normalized). Set to null for natural concatenation.
+dataset_source_list:
+  - config/data/xela.yaml

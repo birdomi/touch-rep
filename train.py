@@ -449,8 +449,11 @@ def get_dataloaders_actionsense_based(cfg: DictConfig):
 
     return train_dset, val_dset
 
-def get_dataloaders_cross_sensor_based(cfg: DictConfig):
-    data_cfg = cfg.data
+def get_dataloaders_cross_sensor_based(cfg: DictConfig, is_eval=False):
+    if not is_eval:
+        data_cfg = cfg.data
+    else:
+        data_cfg = cfg
     dataset_source_list = data_cfg.dataset_source_list
     
     train_datasets = []
