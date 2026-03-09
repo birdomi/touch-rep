@@ -10,6 +10,7 @@ assets/*
 experiments/*
 # C extensions
 *.so
+*.zip
 
 # Distribution / packaging
 .Python
