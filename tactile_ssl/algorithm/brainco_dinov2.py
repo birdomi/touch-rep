@@ -16,13 +16,10 @@ from tactile_ssl.utils.masking import sample_block_mask, sample_block_size_1d
 log = get_pylogger(__name__)
 
 
-class CrossSensorDINOv2Module(DINOv2Module):
+class BraincoDINOv2Module(DINOv2Module):
     def __init__(
         self,
         ibot_mask_ratio: List[float] = [0.1, 0.5],
-        num_sensor: int = 1,
-        sensor_means: Optional[List[List[float]]] = None,
-        sensor_stds: Optional[List[List[float]]] = None,
         *args,
         **kwargs,
     ): 
@@ -30,9 +27,6 @@ class CrossSensorDINOv2Module(DINOv2Module):
         # TODO: Load this in a different way
         # This is valid only when the baseline is subtracted in the xela dataset
         self.ibot_mask_ratio = ibot_mask_ratio
-        self.num_sensor = num_sensor
-        self.sensor_means = sensor_means
-        self.sensor_stds = sensor_stds
 
     def on_validation_batch_end(self, outputs: Dict, batch: Dict, batch_idx: int, trainer_instance=None):
         self.log_on_batch_end(outputs, stage="val", trainer_instance=trainer_instance)
@@ -46,112 +40,61 @@ class CrossSensorDINOv2Module(DINOv2Module):
                 X_orig = batch["sensor"]
 
                 encoder = self.student_encoder_dict["backbone"]
-                
-                if X_pred.ndim == 4:
+
+                if self.teacher_encoder_dict["backbone"].input_type == 'image':
+                    X_pred = X_pred[:5].cpu().numpy()
+                    X_orig = X_orig[:5].cpu().numpy()
+                    print(X_pred.shape, X_orig.shape)
+                if not self.teacher_encoder_dict["backbone"].input_type == 'image':
                     X_pred = einops.rearrange(
                         X_pred,
-                        "b t n (c k) -> b (t k) n c",
+                        "b (t n) (c k) ->b (t k) n c",
                         k=encoder.time_chunk_size,
                         n=encoder.in_dim,
                     )
-                else:
-                    X_pred = einops.rearrange(
-                        X_pred,
-                        "b (t n) (c k) -> b (t k) n c",
-                        k=encoder.time_chunk_size,
-                        n=encoder.in_dim,
-                    )
-                # in_dims corresponds to num sensors
-                # print(X_pred.shape)
-                # X_pred is likely just Xela (3 channels) based on training_step logic
-                if X_pred.shape[-1] == 3:
-                     # Already in Xela format, just add dim for consistency if needed, or skip rearrange
-                     X_pred = X_pred.unsqueeze(-2) # (b, t, n, 1, 3)
-                else:
-                     X_pred = einops.rearrange(X_pred, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=encoder.in_chans)
-                
-                # X_orig is full sensor input (padded), so we rearrange it
-                X_orig = einops.rearrange(X_orig, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=encoder.in_chans)
-                
-                # Take first channel/component (Xela) for visualization
-                X_pred = X_pred[0].cpu().numpy()[..., 0, :3]
-                X_orig = X_orig[0].cpu().numpy()[..., 0, :3]
-                xela_mean = self.teacher_encoder_dict["backbone"].xela_mean.detach().cpu().numpy()
-                xela_std = self.teacher_encoder_dict["backbone"].xela_std.detach().cpu().numpy()
-                # X_pred = xela_sensor_layout(X_pred, xela_mean, xela_std)
-                # X_orig = xela_sensor_layout(X_orig)
-                # print(X_pred.shape, X_orig.shape)
+                    # in_dims corresponds to num sensors
+                    X_pred = einops.rearrange(X_pred, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=encoder.in_chans)
+                    X_orig = einops.rearrange(X_orig, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=encoder.in_chans)
+                    X_pred = X_pred[0].cpu().numpy()[..., 0, :3]
+                    X_orig = X_orig[0].cpu().numpy()[..., 0, :3]
+                    signal_mean = self.teacher_encoder_dict["backbone"].signal_mean.detach().cpu().numpy()
+                    signal_std = self.teacher_encoder_dict["backbone"].signal_std.detach().cpu().numpy()
+                    # X_pred = xela_sensor_layout(X_pred, signal_mean, signal_std)
+                    # X_orig = xela_sensor_layout(X_orig)
 
-                # trainer_instance.wandb.log(
-                #     {
-                #         "val/pred_signal": trainer_instance.wandb.Video(X_pred, fps=5, format="gif"),
-                #         "val/target_signal": trainer_instance.wandb.Video(X_orig, fps=5, format="gif"),
-                #     }
-                # )
+                trainer_instance.wandb.log(
+                    {
+                        "val/pred_signal": trainer_instance.wandb.Image(X_pred),
+                        "val/target_signal": trainer_instance.wandb.Image(X_orig),
+                    }
+                )
 
-    def sample_masks(self, x, valid_masks):
+    def sample_masks(self, x):
         batch_size, _, num_sensors, _ = x.shape
+
+        local_maskblock_sizes = sample_block_size_1d(num_sensors, self.local_mask_scale)[0]
+        global_maskblock_sizes = sample_block_size_1d(num_sensors, self.global_mask_scale)[0]
 
         collated_local_masks, collated_global_masks, collated_ibot_masks = [], [], []
         min_keep_local_patches, min_keep_global_patches = (num_sensors, num_sensors)
-        for i in range(batch_size):
-            # Calculate valid N for this sample
-            # valid_masks: (B, T, N, C)
-            valid_n = int(valid_masks[i, 0, :, 0].sum().item())
-            
-            local_maskblock_sizes = sample_block_size_1d(valid_n, self.local_mask_scale)[0]
-            global_maskblock_sizes = sample_block_size_1d(valid_n, self.global_mask_scale)[0]
-
+        for _ in range(batch_size):
             masks_encoder, masks_complement = [], []
             ibot_masks = []
             for _ in range(self.num_global_masks):
                 mask, mask_complement = sample_block_mask(
-                    [valid_n],
+                    [num_sensors],
                     [global_maskblock_sizes],
                     min_mask_size=self.min_keep,
                     generator=self.generator,
                 )
-                
-                # Expand/Pad masks to full num_sensors
-                # Generate IBOT mask on the valid/unpadded mask first
                 ibot_mask = torch.zeros(len(mask), dtype=torch.bool)
-                num_masked_tokens = int(random.uniform(*self.ibot_mask_ratio) * valid_n)
-                # Ensure we don't try to mask more than available in the block mask
-                num_masked_tokens = min(num_masked_tokens, len(mask))
-                
-                if len(mask) > 0:
-                    ibot_mask_idx = torch.randperm(len(mask))[:num_masked_tokens]
-                    ibot_mask[ibot_mask_idx] = 1
-
-                    # Pad mask (indices) with the first masked token (to avoid masking new valid tokens)
-                    padding_size = num_sensors - len(mask)
-                    if padding_size > 0:
-                        # Pad with mask[0]
-                        pad_val = mask[0].item()
-                        mask = F.pad(torch.as_tensor(mask), (0, padding_size), value=pad_val)
-                        # Pad ibot_mask with False (don't predict the padded duplicates)
-                        ibot_mask = F.pad(ibot_mask, (0, padding_size), value=False)
-                        # Pad mask_complement (map) with 0 (False/Masked region)
-                        if padding_size > 0:
-                            mask_complement = F.pad(torch.as_tensor(mask_complement), (0, padding_size), value=0)
-
-                else:
-                    # Edge case: empty mask? Should not happen with min_mask_size >= 1
-                    # But if it does, pad with something safe (e.g. 0 or dummy)
-                    padding_size = num_sensors
-                    mask = torch.zeros(num_sensors, dtype=torch.long) # Pad with 0?
-                    ibot_mask = torch.zeros(num_sensors, dtype=torch.bool)
-                    mask_complement = torch.zeros(num_sensors, dtype=torch.long) # Pad with 0?
-
+                num_masked_tokens = int(random.uniform(*self.ibot_mask_ratio) * num_sensors)
+                ibot_mask_idx = torch.randperm(len(mask))[:num_masked_tokens]
+                ibot_mask[ibot_mask_idx] = 1
                 ibot_masks.append(ibot_mask)
                 masks_encoder.append(mask)
                 masks_complement.append(mask_complement)
-                # Note: min_keep logic tracks unpadded length?
-                # If we pad, len(mask) is now num_sensors.
-                # So min_keep becomes num_sensors.
-                # This effectively disables the min_keep cropping logic, which is what we want (fixed batch size).
-                min_keep_global_patches = num_sensors
-
+                min_keep_global_patches = min(min_keep_global_patches, len(mask))
             collated_global_masks.append(masks_encoder)
             collated_ibot_masks.append(ibot_masks)
 
@@ -162,25 +105,14 @@ class CrossSensorDINOv2Module(DINOv2Module):
             masks_local = []
             for _ in range(self.num_local_masks):
                 mask, _ = sample_block_mask(
-                    [valid_n],
+                    [num_sensors],
                     [local_maskblock_sizes],
                     min_mask_size=self.min_keep,
                     acceptable_regions=acceptable_regions,
                     generator=self.generator,
                 )
-                
-                # Pad local masks too
-                if len(mask) > 0:
-                    padding_size = num_sensors - len(mask)
-                    if padding_size > 0:
-                         pad_val = mask[0].item()
-                         mask = F.pad(torch.as_tensor(mask), (0, padding_size), value=pad_val)
-                else:
-                    mask = torch.zeros(num_sensors, dtype=torch.long)
-
                 masks_local.append(mask)
-                # min_keep becomes num_sensors because we padded.
-                min_keep_local_patches = num_sensors
+                min_keep_local_patches = min(min_keep_local_patches, len(mask))
             collated_local_masks.append(masks_local)
 
         collated_global_masks = [[cm[:min_keep_global_patches] for cm in masks] for masks in collated_global_masks]
@@ -189,15 +121,12 @@ class CrossSensorDINOv2Module(DINOv2Module):
         local_masks = torch.stack(data.default_collate(collated_local_masks), dim=0).to(x.device)
         global_masks = torch.stack(data.default_collate(collated_global_masks), dim=0).to(x.device)
         ibot_masks = torch.stack(data.default_collate(collated_ibot_masks), dim=0).to(x.device)
-        # print(local_masks.shape, global_masks.shape, ibot_masks.shape)
 
         return global_masks, local_masks, ibot_masks
 
     def forward(
         self,
         xs: torch.Tensor,
-        pos: torch.Tensor,
-        sensor_ids: torch.Tensor,
         global_masks: torch.Tensor,
         local_masks: torch.Tensor,
         ibot_masks: torch.Tensor,
@@ -210,10 +139,10 @@ class CrossSensorDINOv2Module(DINOv2Module):
 
         # TODO: @Akash Sharma - Raise to make sure context encoder implements taking masks as an argument
         student_global_dict = self.student_encoder_dict["backbone"].forward_features(
-            xs, pos, sensor_ids = sensor_ids, masks=global_masks, mask_type="tubelet", masktoken_masks=ibot_masks
+            xs, masks=global_masks, mask_type="tubelet", masktoken_masks=ibot_masks
         )
         student_local_dict = self.student_encoder_dict["backbone"].forward_features(
-            xs, pos, sensor_ids = sensor_ids, masks=local_masks, mask_type="tubelet"
+            xs, masks=local_masks, mask_type="tubelet"
         )
 
         student_global_cls_tokens = student_global_dict["x_norm_regtokens"][:, 0]
@@ -260,7 +189,7 @@ class CrossSensorDINOv2Module(DINOv2Module):
 
         with torch.no_grad():
             teacher_global_dict = self.teacher_encoder_dict["backbone"].forward_features(
-                xs, pos, sensor_ids=sensor_ids, masks=global_masks, mask_type="tubelet"
+                xs, masks=global_masks, mask_type="tubelet"
             )
             teacher_global_cls_tokens = teacher_global_dict["x_norm_regtokens"][:, 0]
 
@@ -350,12 +279,9 @@ class CrossSensorDINOv2Module(DINOv2Module):
         self.step = self.step + 1
         self.generator.manual_seed(self.step)
         x = batch["sensor"]
-        pos = batch["sensor_poses"]
-        sensor_ids = batch["sensor_ids"]
-        valid_masks = batch["valid_mask"]
-        global_masks, local_masks, ibot_masks = self.sample_masks(x, valid_masks)
+        global_masks, local_masks, ibot_masks = self.sample_masks(x)
 
-        loss = self.forward(x, pos, sensor_ids, global_masks, local_masks, ibot_masks)
+        loss = self.forward(x, global_masks, local_masks, ibot_masks)
 
         output = {
             "ssl_loss": loss.item(),
@@ -366,7 +292,7 @@ class CrossSensorDINOv2Module(DINOv2Module):
         cls_embedding = None
         if len(self.online_probes) > 0:
             with torch.no_grad():
-                teacher_dict = self.teacher_encoder_dict["backbone"].forward_features(x, pos, sensor_ids=sensor_ids)
+                teacher_dict = self.teacher_encoder_dict["backbone"].forward_features(x)
                 cls_embedding = teacher_dict["x_norm_regtokens"].squeeze(1)
                 embedding = teacher_dict["x_norm_patchtokens"]
                 embedding = F.layer_norm(embedding, (embedding.size(-1),))
@@ -376,31 +302,18 @@ class CrossSensorDINOv2Module(DINOv2Module):
         for probe in self.online_probes:
             probe_name: str = str(probe.probe_name)
             if probe_name == "reconstruction":
-                targets = []
-                for sensor_idx in range(self.num_sensor):
-                    target_ = target[sensor_ids == sensor_idx]
-                    if sensor_idx == 0:
-                        target_ = target_[:, :, :, :3]
-                    elif sensor_idx == 1:
-                        target_ = target_[:, -1, :, :25]
-                    # print(target.shape, target_.shape, sensor_idx)
-                    targets.append(target_)
-
-                probe_loss, decoded_x = probe(embedding, target=targets, sensor_ids=sensor_ids, sensor_wise=True)
+                if not self.teacher_encoder_dict["backbone"].input_type == 'image':
+                    target = einops.rearrange(
+                        target, "b (t k) n c -> b (t n) (c k)", k=self.student_encoder_dict["backbone"].time_chunk_size
+                    )
+                # print(probe, embedding.shape) # embedding = B N C
+                # print(target.shape, embedding.shape) # 64, 192, 64
+                probe_loss, decoded_x = probe(embedding, target=target)
                 online_probes_loss += probe_loss
                 output[f"{probe_name}_loss"] = probe_loss.item()
-                output[f"{probe_name}_img"] = decoded_x[0].detach()
-
-            # elif "classification" in probe_name:
-            #     gt_labels = batch[probe_name]
-            #     probe_loss, pred_logits = probe(cls_embedding, target=gt_labels)
-            #     pred_labels = torch.argmax(pred_logits, dim=1)
-            #     accuracy = (pred_labels == gt_labels).float().mean()
-            #     online_probes_loss += probe_loss
-            #     output[f"{probe_name}_loss"] = probe_loss.item()
-            #     output[f"{probe_name}_accuracy"] = accuracy
-            elif "sensor_classification" in probe_name:
-                gt_labels = sensor_ids
+                output[f"{probe_name}_img"] = decoded_x.detach()
+            elif "classification" in probe_name:
+                gt_labels = batch[probe_name]
                 probe_loss, pred_logits = probe(cls_embedding, target=gt_labels)
                 pred_labels = torch.argmax(pred_logits, dim=1)
                 accuracy = (pred_labels == gt_labels).float().mean()

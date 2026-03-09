@@ -7,6 +7,7 @@ from .signal_transformer import SignalTransformer
 from .xela_transformer import *  # noqa: F401
 from .xela_dual_pos_transformer import *  # noqa: F401
 from .cross_sensor_transformer import *  # noqa: F401
+from .brainco_transformer import *  # noqa: F401
 
 
 VIT_EMBED_DIMS = {

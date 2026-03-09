@@ -42,5 +42,6 @@ class OnlineProbeModule(nn.Module):
             for idx, pred in enumerate(prediction):
                 loss += self.loss_fn(pred, target[idx])
         else:
+            # print(prediction.shape, target.shape)
             loss = self.loss_fn(prediction, target)
         return loss, prediction

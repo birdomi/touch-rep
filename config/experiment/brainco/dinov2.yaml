@@ -1,0 +1,24 @@
+# @package _global_
+defaults:
+  - override /data: brainco
+  - override /algorithm: brainco_dinov2
+  - _self_
+
+model_size: tiny
+experiment_name: dinov2_brainco_${model_size}
+ckpt_path: ./
+
+wandb:
+  entity: ryk012
+  project: brainco_dinov2
+  group: dino_brainco${model_size}
+  tags: ["brainco${model_size}"]
+
+trainer:
+  max_epochs: 500
+  validation_frequency: 50
+
+algorithm:
+  centering: centering
+  encoder:
+    _target_: tactile_ssl.model.brainco_${model_size}

@@ -567,6 +567,113 @@ def get_dataloaders_cross_sensor_based(cfg: DictConfig, is_eval=False):
 
     return combined_train_dset, combined_val_dset, train_sampler, sensor_means, sensor_stds
 
+def get_dataloaders_brainco_based(cfg: DictConfig):
+    data_cfg = cfg.data
+    
+    def get_brainco_dataset(dataset_cfg: DictConfig, obj_name: str, episode_id: str, obj_class: int):
+        data_path = dataset_cfg.get("data_path", "dataset/brainco/pretraining")
+        full_path = f"{data_path}/{obj_name}/{episode_id}"
+        if not os.path.exists(full_path):
+            print(f"Dataset path {full_path} not found")
+            return None
+            
+        dataset = hydra.utils.instantiate(
+            dataset_cfg,
+            data_path=full_path,
+            object_class=obj_class,
+        )
+        return dataset
+
+    train_datasets, val_datasets = [], []
+    object_classes = []
+    object_class_sizes = []
+    
+    dataset_list = data_cfg.dataset_list
+    for dataset_l in dataset_list:
+        if dataset_l.type == "teleop":
+            train_episodes = dataset_l.get("train_dataset_ids", [])
+            val_episodes = dataset_l.get("val_dataset_ids", [])
+            for obj in dataset_l.get("sequence_list", []):
+                object_classes.append(obj)
+                object_class_sizes.append(0)
+                obj_class_idx = len(object_classes) - 1
+                
+                for ep in train_episodes:
+                    ep_str = f"episode_{int(ep):04d}"
+                    ds = get_brainco_dataset(dataset_l.dataset, obj, ep_str, obj_class_idx)
+                    if ds is not None:
+                        object_class_sizes[-1] += len(ds)
+                        train_datasets.append(ds)
+                        
+                for ep in val_episodes:
+                    ep_str = f"episode_{int(ep):04d}"
+                    ds = get_brainco_dataset(dataset_l.dataset, obj, ep_str, obj_class_idx)
+                    if ds is not None:
+                        val_datasets.append(ds)
+    
+    if not train_datasets:
+        # Fallback to single dataset loading if dataset_list not provided/usable
+        dataset = hydra.utils.instantiate(data_cfg.dataset)
+        train_dset_size = int(len(dataset) * cfg.data.get("train_val_split", 0.9))
+        train_dset, val_dset = data.random_split(dataset, [train_dset_size, len(dataset) - train_dset_size])
+    else:
+        train_dset = data.ConcatDataset(train_datasets)
+        val_dset = data.ConcatDataset(val_datasets) if val_datasets else None
+
+        # Stats
+        print(f"Brainco object class sizes: {object_class_sizes}")
+        if np.sum(object_class_sizes) > 0:
+            object_class_ratios = np.array(object_class_sizes) / np.sum(object_class_sizes)
+            object_class_weights = 1 / (object_class_ratios + 1e-8)
+            object_class_weights = object_class_weights / np.sum(object_class_weights)
+            
+            with open_dict(cfg):
+                cfg.data.object_classes = object_classes
+                cfg.data.object_class_weights = object_class_weights.tolist()
+
+    # Pre-calculated or dummy stats for brainco
+    mean = [0.0] * 4
+    std = [1.0] * 4
+    
+    # Calculate BrainCo dataset statistics
+    print("Calculating Brainco dataset statistics...")
+    all_data = []
+    if hasattr(train_dset, "datasets"):
+        # ConcatDataset
+        for ds in train_dset.datasets:
+            if hasattr(ds, "tactile_array"):
+                all_data.append(ds.tactile_array)
+    elif hasattr(train_dset, "tactile_array"):
+        all_data.append(train_dset.tactile_array)
+        
+    if all_data:
+        all_data_np = np.concatenate(all_data, axis=0) # shape (Total_N, num_sensors, channels)
+        calc_mean = np.mean(all_data_np, axis=(0, 1)).tolist()
+        calc_std = np.std(all_data_np, axis=(0, 1)).tolist()
+        mean = calc_mean
+        std = [s if s > 1e-6 else 1.0 for s in calc_std]
+        print(f"Calculated mean: {mean}")
+        print(f"Calculated std: {std}")
+    else:
+        print("Could not calculate stats, using defaults")
+    
+    if cfg.data.get("normalization") and cfg.data.normalization.get("mean") is None:
+        with open_dict(cfg):
+            cfg.data.normalization.mean = mean
+            cfg.data.normalization.std = std
+    elif cfg.data.get("normalization"):
+        mean = cfg.data.normalization.mean
+        std = cfg.data.normalization.std
+
+    train_dset.sensor_mean = mean
+    train_dset.sensor_std = std
+    if val_dset:
+        val_dset.sensor_mean = mean
+        val_dset.sensor_std = std
+
+    return train_dset, val_dset
+
+
 def get_dataloaders(cfg: DictConfig):
     train_sampler = None
     if "d360" in cfg.data.sensor:
@@ -578,6 +685,9 @@ def get_dataloaders(cfg: DictConfig):
         train_dset, val_dset = get_dataloaders_gelsight_based(cfg)
     elif cfg.data.sensor == "actionsense":
         train_dset, val_dset = get_dataloaders_actionsense_based(cfg)
+    elif cfg.data.sensor == "brainco":
+        train_dset, val_dset = get_dataloaders_brainco_based(cfg)
+        sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std    
     elif cfg.data.sensor == "cross_sensor":
         train_dset, val_dset, train_sampler, sensor_means, sensor_stds = get_dataloaders_cross_sensor_based(cfg)
     else:

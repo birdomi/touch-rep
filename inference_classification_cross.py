@@ -31,7 +31,7 @@ logger = get_pylogger(__name__)
 
 config = "config/encoder/cross_sensor_encoder.yaml"
 data_path = "config/data/cross_sensor_eval.yaml"
-ckpt_path = "experiments/dinov2_cross_sensor_tiny/2026.02.18-19-28/checkpoints/epoch-0100.ckpt"
+ckpt_path = "experiments/dinov2_cross_sensor_tiny/2026.02.24-12-19/checkpoints/epoch-0120.ckpt"
 
 with open(data_path, "r") as f:
     data_cfg = yaml.safe_load(f)
@@ -60,7 +60,6 @@ def main():
         print("Using WeightedRandomSampler for training dataloader.")
         loader_args['shuffle'] = False
         loader_args['sampler'] = train_sampler
-    print('##', loader_args)
     
     train_loader = data.DataLoader(train_dset, **loader_args)
     val_loader = data.DataLoader(val_dset, **data_cfg_.val_dataloader)
@@ -100,7 +99,7 @@ def main():
         for k, v in state_dict.items():
             if k.startswith("teacher_encoder.backbone."):
                 k_new = k.replace("teacher_encoder.backbone.", "")
-                new_state_dict[k_new] = 
+                new_state_dict[k_new] = v
         
         state_dict = new_state_dict
 

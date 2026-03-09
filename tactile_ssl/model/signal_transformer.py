@@ -268,7 +268,6 @@ class SignalTransformer(nn.Module):
         masktoken_masks: Optional[List[torch.Tensor]] = None,
     ):
         x = self.pre_embed(x)
-
         x, bias = self.prepare_tokens_with_mask(x, masks, mask_type, masktoken_masks)
         
         x_prenorm, x_postnorm = self.transform(x, bias)
