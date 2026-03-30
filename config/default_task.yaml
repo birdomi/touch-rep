@@ -43,3 +43,7 @@ attn_info:
   MemEffAttention: attn
   DiffAttention: diff_attn
   MemEffDiffAttention: diff_attn
+
+all_split: false
+num_folds: 5
+fold: 0

@@ -8,3 +8,4 @@ from .xela_mae import XelaMAEModule  # noqa F402
 from .xela_pos_dinov2 import XelaDINOv2PosModule  # noqa F403
 from .cross_sensor_dinov2 import CrossSensorDINOv2Module  # noqa F404
 from .brainco_dinov2 import BraincoDINOv2Module  # noqa F405
+from .multi_sensor_dinov2 import MultiSensorDINOv2Module  # noqa F406

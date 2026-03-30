@@ -31,7 +31,7 @@ logger = get_pylogger(__name__)
 
 config = "config/encoder/cross_sensor_encoder.yaml"
 data_path = "config/data/cross_sensor_eval.yaml"
-ckpt_path = "experiments/dinov2_cross_sensor_tiny/2026.02.24-12-19/checkpoints/epoch-0120.ckpt"
+ckpt_path = "experiments/dinov2_cross_sensor_tiny/2026.02.27-09-55/checkpoints/epoch-0470.ckpt"
 
 with open(data_path, "r") as f:
     data_cfg = yaml.safe_load(f)
@@ -110,7 +110,7 @@ def main():
 
     
     # Optimizer & Loss
-    optimizer = optim.SGD(classifier.parameters(), lr=1e-4, weight_decay=1e-4, momentum=0.9)
+    optimizer = optim.AdamW(classifier.parameters(), lr=1e-4, weight_decay=1e-4)
     criterion = nn.CrossEntropyLoss()
 
     ###  5. [NEW] Training Loop (Optional)
@@ -166,38 +166,38 @@ def main():
         avg_loss = total_loss / len(train_loader)
         logger.info(f"End of Epoch {epoch+1}: Train Loss: {avg_loss:.4f}, Train Acc: {train_acc:.2f}%")
 
-    # --- Validation Phase ---
-    val_loss = 0
-    val_total = 0
-    val_correct = 0
-    classifier.eval()
-    with torch.no_grad():
-        for batch in val_loader:
-            # Move batch
-            if isinstance(batch, dict):
-                batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-            
-            gt = batch['object_classification']
+        # --- Validation Phase ---
+        val_loss = 0
+        val_total = 0
+        val_correct = 0
+        classifier.eval()
+        with torch.no_grad():
+            for batch in val_loader:
+                # Move batch
+                if isinstance(batch, dict):
+                    batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+                
+                gt = batch['object_classification']
 
-            # Feature Extraction
-            tactile_rep = model.forward_features(batch['sensor'], batch['sensor_poses'], sensor_ids=batch['sensor_ids'])
-            cls_embedding = tactile_rep["x_norm_regtokens"].squeeze(1)
-            # patch_embedding = tactile_rep["x_norm_patchtokens"].mean(1)
-            # features = torch.cat([cls_embedding, patch_embedding], dim=1)
-            features = cls_embedding
+                # Feature Extraction
+                tactile_rep = model.forward_features(batch['sensor'], batch['sensor_poses'], sensor_ids=batch['sensor_ids'])
+                cls_embedding = tactile_rep["x_norm_regtokens"].squeeze(1)
+                # patch_embedding = tactile_rep["x_norm_patchtokens"].mean(1)
+                # features = torch.cat([cls_embedding, patch_embedding], dim=1)
+                features = cls_embedding
 
-            # Prediction
-            outputs = classifier(features)
-            loss = criterion(outputs, gt)
+                # Prediction
+                outputs = classifier(features)
+                loss = criterion(outputs, gt)
 
-            val_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            val_total += gt.size(0)
-            val_correct += (predicted == gt).sum().item()
+                val_loss += loss.item()
+                _, predicted = torch.max(outputs.data, 1)
+                val_total += gt.size(0)
+                val_correct += (predicted == gt).sum().item()
 
-    val_acc = 100 * val_correct / val_total
-    logger.info(f"Validation Result - Acc: {val_acc:.2f}%, Loss: {val_loss/len(val_loader):.4f}")
-    logger.info("-" * 50)
+        val_acc = 100 * val_correct / val_total
+        logger.info(f"Validation Result - Acc: {val_acc:.2f}%, Loss: {val_loss/len(val_loader):.4f}")
+        logger.info("-" * 50)
 
     logger.info("Training finished.")
 

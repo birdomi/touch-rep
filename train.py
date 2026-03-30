@@ -26,8 +26,48 @@ from tactile_ssl.utils.logging import get_pylogger, print_config_tree  # noqa: E
 from tactile_ssl.data.d360.utils import get_weights, get_experiment_name, get_modality_tag
 from tactile_ssl.utils.combined_dataset import CombinedDataset
 from tactile_ssl.data.cross_sensor_dataset import CrossSensorDatasetWrapper
+import torch.nn.functional as F
 
 logger = get_pylogger(__name__)
+
+
+class SensorIdDatasetWrapper(data.Dataset):
+    """Wraps a dataset, injects ``sensor_id`` and zero-pads the sensor channel dim.
+
+    Used to unify BrainCo (in_chans=4) and XELA (in_chans=40) samples so they
+    can be collated into the same batch by PyTorch's default_collate.
+
+    Args:
+        dataset:      Underlying dataset.
+        sensor_id:    Integer sensor type (0=BrainCo, 1=XELA).
+        max_channels: Target channel size after padding (default 40 = 10*4).
+    """
+
+    def __init__(self, dataset: data.Dataset, sensor_id: int, max_channels: int = 40):
+        self.dataset = dataset
+        self.sensor_id = sensor_id
+        self.max_channels = max_channels
+
+    def __len__(self):
+        return len(self.dataset)
+
+    # Keys kept in the output; others (e.g. wrist_positions) are dropped so
+    # that BrainCo and XELA samples can be collated in the same batch.
+    _KEEP_KEYS = {"sensor", "sensor_poses", "object_classification", "sensor_id"}
+
+    def __getitem__(self, idx):
+        sample = dict(self.dataset[idx])
+        sensor = sample["sensor"]  # (..., C)
+        c = sensor.shape[-1]
+        if c < self.max_channels:
+            pad = self.max_channels - c
+            sensor = F.pad(sensor, (0, pad))
+        sample["sensor"] = sensor
+        sample["sensor_id"] = torch.tensor(self.sensor_id, dtype=torch.long)
+        return {k: v for k, v in sample.items() if k in self._KEEP_KEYS}
+
+    def __getattr__(self, name):
+        return getattr(self.dataset, name)
 
 OmegaConf.register_new_resolver("int_multiply", lambda a, b: int(a * b))
 OmegaConf.register_new_resolver("int_divide", lambda a, b: a // b)
@@ -567,6 +607,89 @@ def get_dataloaders_cross_sensor_based(cfg: DictConfig, is_eval=False):
 
     return combined_train_dset, combined_val_dset, train_sampler, sensor_means, sensor_stds
 
+def get_dataloaders_gigahands_based(cfg: DictConfig):
+    """Load GigaHands, OakInkV2, or combined dataset for DINOv2 SSL pretraining."""
+    from tactile_ssl.data.gigahands_tactile import GigaHandsTactileDataset
+    from tactile_ssl.data.oakinkv2_tactile import OakInkV2TactileDataset
+
+    data_cfg = cfg.data
+    sensor   = data_cfg.get("sensor", "gigahands")
+    window_size   = int(data_cfg.get("window_size", 3))
+    window_stride = int(data_cfg.get("window_stride", 1))
+    train_val_split = float(data_cfg.get("train_val_split", 0.9))
+    scenes = list(data_cfg.scenes) if data_cfg.get("scenes") else None
+
+    if sensor == "gigahands_oakinkv2":
+        # ── Combined: GigaHands + OakInkV2 ──────────────────────────────────
+        gh_kwargs = dict(
+            data_root=data_cfg.gigahands_data_root,
+            window_size=window_size, window_stride=window_stride,
+            train_val_split=train_val_split, scenes=scenes,
+        )
+        oi_kwargs = dict(
+            data_root=data_cfg.oakinkv2_data_root,
+            window_size=window_size, window_stride=window_stride,
+            train_val_split=train_val_split, scenes=scenes,
+        )
+        gh_train = GigaHandsTactileDataset(split="train", **gh_kwargs)
+        gh_val   = GigaHandsTactileDataset(split="val",   **gh_kwargs)
+        oi_train = OakInkV2TactileDataset(split="train",  **oi_kwargs)
+        oi_val   = OakInkV2TactileDataset(split="val",    **oi_kwargs)
+
+        # Compute normalization from both train sets combined
+        all_contact = (
+            [seq.joint_data[..., 3].reshape(-1) for seq in gh_train._sequences] +
+            [seq.joint_data[..., 3].reshape(-1) for seq in oi_train._sequences]
+        )
+        train_datasets = [gh_train, oi_train]
+        val_datasets   = [gh_val,   oi_val]
+    else:
+        # ── Single dataset ──────────────────────────────────────────────────
+        dataset_cls = OakInkV2TactileDataset if sensor == "oakinkv2" else GigaHandsTactileDataset
+        common_kwargs = dict(
+            data_root=data_cfg.data_root,
+            window_size=window_size, window_stride=window_stride,
+            train_val_split=train_val_split, scenes=scenes,
+        )
+        train_ds = dataset_cls(split="train", **common_kwargs)
+        val_ds   = dataset_cls(split="val",   **common_kwargs)
+        all_contact = [seq.joint_data[..., 3].reshape(-1) for seq in train_ds._sequences]
+        train_datasets = [train_ds]
+        val_datasets   = [val_ds]
+
+    # ── Compute c-channel normalization stats ────────────────────────────────
+    logger.info(f"Computing {sensor} contact normalization stats…")
+    if all_contact:
+        arr      = np.concatenate(all_contact)
+        mean_val = float(np.mean(arr))
+        std_val  = float(np.std(arr))
+        std_val  = std_val if std_val > 1e-6 else 1.0
+    else:
+        mean_val, std_val = 0.0, 1.0
+    logger.info(f"  contact  mean={mean_val:.6f}  std={std_val:.6f}")
+
+    with open_dict(cfg):
+        cfg.data.normalization.mean = [mean_val]
+        cfg.data.normalization.std  = [std_val]
+
+    for ds in train_datasets + val_datasets:
+        ds.update_normalization(mean_val, std_val)
+
+    train_dset = data.ConcatDataset(train_datasets) if len(train_datasets) > 1 else train_datasets[0]
+    val_dset   = data.ConcatDataset(val_datasets)   if len(val_datasets)   > 1 else val_datasets[0]
+
+    train_dset.sensor_mean = [mean_val]
+    train_dset.sensor_std  = [std_val]
+    val_dset.sensor_mean   = [mean_val]
+    val_dset.sensor_std    = [std_val]
+
+    logger.info(
+        f"{sensor}: {len(train_dset)} train windows, "
+        f"{len(val_dset)} val windows  (window_size={window_size})"
+    )
+    return train_dset, val_dset
+
+
 def get_dataloaders_brainco_based(cfg: DictConfig):
     data_cfg = cfg.data
     
@@ -674,6 +797,189 @@ def get_dataloaders_brainco_based(cfg: DictConfig):
     return train_dset, val_dset
 
 
+def get_dataloaders_brainco_xela_based(cfg: DictConfig):
+    """Load BrainCo and XELA-grouped datasets for multi-sensor joint training.
+
+    BrainCo:    sensor=(1,10,4)  wrapped → sensor=(1,10,40) + sensor_id=0
+    XELA:       sensor=(1,10,40)          + sensor_id=1 (from dataset directly)
+
+    Per-sensor 4-channel stats are computed and stored as [[b_mean_4ch], [x_mean_4ch]]
+    so that MultiSensorBraincoTransformer can normalise each sensor type independently.
+
+    dataset_list entries must have a 'sensor_type' field:
+      sensor_type: brainco      → BraincoSSLDataset  (episode-based loading)
+      sensor_type: xela_grouped → XelaSSLDatasetGrouped (sequence/id loading)
+    """
+    XELA_MAX_CHANNELS = 4    # BrainCo/XELA 모두 in_chans=4로 통일
+
+    data_cfg = cfg.data
+    # Keep raw (unwrapped) train datasets for stats computation
+    brainco_train_raw: list = []
+    xela_train_raw:   list = []
+    train_datasets, val_datasets = [], []
+    train_dataset_types: list = []   # 'brainco' or 'xela' per dataset in train_datasets
+    object_classes: list = []
+    object_class_sizes: list = []
+
+    for dataset_l in data_cfg.dataset_list:
+        sensor_type = dataset_l.get("sensor_type", "brainco")
+        train_ids = dataset_l.get("train_dataset_ids", [])
+        val_ids   = dataset_l.get("val_dataset_ids",   [])
+
+        if sensor_type == "brainco":
+            # Episode-based loading: data_path/<obj>/<episode_XXXX>/
+            for obj in dataset_l.get("sequence_list", []):
+                object_classes.append(f"brainco_{obj}")
+                object_class_sizes.append(0)
+                obj_class_idx = len(object_classes) - 1
+
+                for ep in train_ids:
+                    ep_str = f"episode_{int(ep):04d}"
+                    full_path = f"{dataset_l.dataset.get('data_path', 'dataset/brainco/pretraining')}/{obj}/{ep_str}"
+                    if not os.path.exists(full_path):
+                        logger.warning(f"BrainCo path not found: {full_path}")
+                        continue
+                    ds = hydra.utils.instantiate(
+                        dataset_l.dataset, data_path=full_path, object_class=obj_class_idx
+                    )
+                    object_class_sizes[-1] += len(ds)
+                    brainco_train_raw.append(ds)
+                    # Wrap: adds sensor_id=0, pads channels 4→40
+                    train_datasets.append(
+                        SensorIdDatasetWrapper(ds, sensor_id=0, max_channels=XELA_MAX_CHANNELS)
+                    )
+                    train_dataset_types.append("brainco")
+
+                for ep in val_ids:
+                    ep_str = f"episode_{int(ep):04d}"
+                    full_path = f"{dataset_l.dataset.get('data_path', 'dataset/brainco/pretraining')}/{obj}/{ep_str}"
+                    if not os.path.exists(full_path):
+                        continue
+                    ds = hydra.utils.instantiate(
+                        dataset_l.dataset, data_path=full_path, object_class=obj_class_idx
+                    )
+                    val_datasets.append(
+                        SensorIdDatasetWrapper(ds, sensor_id=0, max_channels=XELA_MAX_CHANNELS)
+                    )
+
+        elif sensor_type == "xela_grouped":
+            # Sequence/id-based loading: data_path/<sequence>/<id>/
+            for seq in dataset_l.get("sequence_list", []):
+                object_classes.append(f"xela_{seq}")
+                object_class_sizes.append(0)
+                obj_class_idx = len(object_classes) - 1
+
+                base_path = dataset_l.dataset.get("data_path", "")
+
+                for d_id in train_ids:
+                    full_path = f"{base_path}/{seq}/{d_id}"
+                    if not os.path.exists(full_path):
+                        logger.warning(f"XELA path not found: {full_path}")
+                        continue
+                    ds = hydra.utils.instantiate(
+                        dataset_l.dataset, data_path=full_path, object_class=obj_class_idx
+                    )
+                    object_class_sizes[-1] += len(ds)
+                    xela_train_raw.append(ds)
+                    train_datasets.append(ds)  # already outputs sensor_id=1 and 40 channels
+                    train_dataset_types.append("xela")
+
+                for d_id in val_ids:
+                    full_path = f"{base_path}/{seq}/{d_id}"
+                    if not os.path.exists(full_path):
+                        continue
+                    ds = hydra.utils.instantiate(
+                        dataset_l.dataset, data_path=full_path, object_class=obj_class_idx
+                    )
+                    val_datasets.append(ds)
+
+        else:
+            raise NotImplementedError(f"Unknown sensor_type '{sensor_type}' in brainco_xela dataset_list")
+
+    if not train_datasets:
+        raise ValueError("No training datasets loaded for brainco_xela sensor.")
+
+    train_dset = data.ConcatDataset(train_datasets)
+    val_dset   = data.ConcatDataset(val_datasets) if val_datasets else None
+
+    # ── Compute per-sensor 4-channel stats ───────────────────────────────────
+    # Result shape: [[b0,b1,b2,b3], [x0,x1,x2,x3]]  → (2, 4) in torch
+    logger.info("Computing per-sensor normalization stats for brainco_xela…")
+
+    def _nanstats(arrays_4ch):
+        """Compute mean/std over a list of (N, 4) arrays, ignoring zeros."""
+        if not arrays_4ch:
+            return [0.0]*4, [1.0]*4
+        combined = np.concatenate(arrays_4ch, axis=0)
+        combined = np.where(combined == 0, np.nan, combined)
+        m  = np.nanmean(combined, axis=0).tolist()
+        s_ = np.nanstd(combined,  axis=0)
+        s  = [float(v) if v > 1e-6 else 1.0 for v in s_]
+        return m, s
+
+    # BrainCo stats
+    brainco_flat = []
+    for ds in brainco_train_raw:
+        if hasattr(ds, "tactile_array"):
+            brainco_flat.append(ds.tactile_array.reshape(-1, 4).astype(np.float32))
+    brainco_mean, brainco_std = _nanstats(brainco_flat)
+    logger.info(f"  BrainCo mean: {brainco_mean}  std: {brainco_std}")
+
+    # XELA stats (4-channel: xyz + L2 norm, matching _group_sensor_data output)
+    xela_flat = []
+    for ds in xela_train_raw:
+        if hasattr(ds, "xela_array"):
+            raw = ds.xela_array[..., 1:].reshape(-1, 3).astype(np.float32)  # (N*368, 3)
+            l2  = np.linalg.norm(raw, axis=-1, keepdims=True)               # (N*368, 1)
+            xela_flat.append(np.concatenate([raw, l2], axis=-1))            # (N*368, 4)
+    xela_mean, xela_std = _nanstats(xela_flat)
+    logger.info(f"  XELA mean: {xela_mean}  std: {xela_std}")
+
+    # Per-sensor stats as list-of-lists for Hydra / torch.tensor() compatibility
+    per_sensor_mean = [brainco_mean, xela_mean]   # [[4 floats], [4 floats]]
+    per_sensor_std  = [brainco_std,  xela_std]
+
+    with open_dict(cfg):
+        cfg.data.normalization.mean = per_sensor_mean
+        cfg.data.normalization.std  = per_sensor_std
+        if object_class_sizes and np.sum(object_class_sizes) > 0:
+            ratios  = np.array(object_class_sizes) / np.sum(object_class_sizes)
+            weights = 1.0 / (ratios + 1e-8)
+            weights = (weights / np.sum(weights)).tolist()
+            cfg.data.object_classes       = object_classes
+            cfg.data.object_class_weights = weights
+
+    train_dset.sensor_mean = per_sensor_mean
+    train_dset.sensor_std  = per_sensor_std
+    if val_dset is not None:
+        val_dset.sensor_mean = per_sensor_mean
+        val_dset.sensor_std  = per_sensor_std
+
+    # ── 50:50 WeightedRandomSampler ──────────────────────────────────────────
+    brainco_total = sum(len(ds) for ds in brainco_train_raw)
+    xela_total    = sum(len(ds) for ds in xela_train_raw)
+    train_sampler = None
+    if brainco_total > 0 and xela_total > 0:
+        brainco_w = 0.5 / brainco_total
+        xela_w    = 0.5 / xela_total
+        sample_weights = []
+        for ds, stype in zip(train_datasets, train_dataset_types):
+            w = brainco_w if stype == "brainco" else xela_w
+            sample_weights.extend([w] * len(ds))
+        sample_weights = torch.FloatTensor(sample_weights)
+        train_sampler = data.WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(train_dset),
+            replacement=True,
+        )
+        logger.info(
+            f"WeightedRandomSampler: BrainCo {brainco_total} samples, "
+            f"XELA {xela_total} samples → 50:50 ratio"
+        )
+
+    return train_dset, val_dset, train_sampler
+
+
 def get_dataloaders(cfg: DictConfig):
     train_sampler = None
     if "d360" in cfg.data.sensor:
@@ -685,9 +991,15 @@ def get_dataloaders(cfg: DictConfig):
         train_dset, val_dset = get_dataloaders_gelsight_based(cfg)
     elif cfg.data.sensor == "actionsense":
         train_dset, val_dset = get_dataloaders_actionsense_based(cfg)
+    elif cfg.data.sensor in ["gigahands", "oakinkv2", "gigahands_oakinkv2"]:
+        train_dset, val_dset = get_dataloaders_gigahands_based(cfg)
+        sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
     elif cfg.data.sensor == "brainco":
         train_dset, val_dset = get_dataloaders_brainco_based(cfg)
-        sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std    
+        sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
+    elif cfg.data.sensor == "brainco_xela":
+        train_dset, val_dset, train_sampler = get_dataloaders_brainco_xela_based(cfg)
+        sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
     elif cfg.data.sensor == "cross_sensor":
         train_dset, val_dset, train_sampler, sensor_means, sensor_stds = get_dataloaders_cross_sensor_based(cfg)
     else:

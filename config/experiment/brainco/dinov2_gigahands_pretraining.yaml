@@ -1,0 +1,24 @@
+# @package _global_
+defaults:
+  - override /data: gigahands
+  - override /algorithm: gigahands_dinov2
+  - _self_
+
+model_size: tiny
+experiment_name: dinov2_gigahands_${model_size}
+ckpt_path: ./
+
+wandb:
+  entity: ryk9012-gwangju-institute-of-science-and-technology
+  project: gigahands_dinov2
+  group: dino_gigahands_${model_size}
+  tags: ["gigahands", "${model_size}"]
+
+trainer:
+  max_epochs: 1000
+  validation_frequency: 50
+
+algorithm:
+  centering: centering
+  encoder:
+    _target_: tactile_ssl.model.multi_sensor_brainco_tiny

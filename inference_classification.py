@@ -31,7 +31,7 @@ logger = get_pylogger(__name__)
 config = "config/encoder/xela_sparshskin.yaml"
 data_path = "config/data/xela.yaml"
 # ckpt_path = "experiments/dinov2_xela_tiny/2026.01.28-17-59/checkpoints/epoch-0050.ckpt"
-ckpt_path = "experiments/dinov2_xela_no_cls_tiny/2026.02.19-12-31/checkpoints/epoch-0120.ckpt"
+ckpt_path = "experiments/dinov2_xela_no_cls_tiny/2026.02.19-12-31/checkpoints/epoch-0470.ckpt"
 
 
 with open(data_path, "r") as f:

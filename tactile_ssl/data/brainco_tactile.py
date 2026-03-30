@@ -173,7 +173,7 @@ class BraincoSSLDataset(data.Dataset):
             config.window_overlap = 0.0
         if config.get("bias_noise_std") is None:
             config.bias_noise_std = 0.0
-        if config.get("bias_range") is None:
+        if config.get("bias_range") is None: 
             config.bias_range = 0.0
 
         self.window_time = config.window_time
@@ -295,10 +295,19 @@ class BraincoSSLDataset(data.Dataset):
         tactile_list = []
         for frame in frames:
             tactile_info = frame["tactiles"]
-            left_path = self.data_path / tactile_info["left_ee"]
-            right_path = self.data_path / tactile_info["right_ee"]
-            left_tactile = np.load(str(left_path)).reshape(-1, 4)   # (num_sensors_left, 4)
-            right_tactile = np.load(str(right_path)).reshape(-1, 4)  # (num_sensors_right, 4)
+            
+            if isinstance(tactile_info["left_ee"], str):
+                left_path = self.data_path / tactile_info["left_ee"]
+                left_tactile = np.load(str(left_path)).reshape(-1, 4)   # (num_sensors_left, 4)
+            else:
+                left_tactile = np.array(tactile_info["left_ee"]).reshape(-1, 4)
+                
+            if isinstance(tactile_info["right_ee"], str):
+                right_path = self.data_path / tactile_info["right_ee"]
+                right_tactile = np.load(str(right_path)).reshape(-1, 4)  # (num_sensors_right, 4)
+            else:
+                right_tactile = np.array(tactile_info["right_ee"]).reshape(-1, 4)
+                
             # Concatenate left and right tactile data along sensor axis
             tactile = np.concatenate([left_tactile, right_tactile], axis=0)  # (num_sensors, 4)
             tactile_list.append(tactile)
@@ -342,6 +351,7 @@ class BraincoSSLDataset(data.Dataset):
 
         # Tactile sensor data for this window
         sensor_data = self.tactile_array[index : index + self.num_frames_per_window]
+        # print(sensor_data.shape)
 
         # Joint positions for this window
         joint_positions = self.read_joint_sample(index)
@@ -357,13 +367,14 @@ class BraincoSSLDataset(data.Dataset):
         fingertip_positions = torch.from_numpy(fingertip_positions).float()
         wrist_positions = torch.from_numpy(wrist_positions).float()
 
-        sample_dict["sensor"] = sensor_data
-        sample_dict["joint_angles"] = joint_positions
-        sample_dict["sensor_poses"] = fingertip_positions
-        sample_dict["wrist_positions"] = wrist_positions
-        # sample_dict.update({"sensor": sensor_data})
-        # sample_dict.update({"joint_angles": joint_angles})
-        # sample_dict.update({"sensor_poses": sensor_poses})
+        # sample_dict["sensor"] = sensor_data
+        # sample_dict["joint_angles"] = joint_positions
+        # sample_dict["sensor_poses"] = fingertip_positions
+        # sample_dict["wrist_positions"] = wrist_positions
+        sample_dict.update({"sensor": sensor_data})
+        sample_dict.update({"joint_angles": joint_positions})
+        sample_dict.update({"sensor_poses": fingertip_positions})
+        sample_dict.update({"wrist_positions": wrist_positions})
         if self.object_label is not None:
             sample_dict["object_classification"] = torch.tensor(self.object_label)
 

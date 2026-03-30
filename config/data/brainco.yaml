@@ -1,5 +1,5 @@
 train_dataloader:
-  batch_size: 256
+  batch_size: 64
   num_workers: 8
   shuffle: True
   drop_last: True
@@ -29,14 +29,13 @@ dataset_list:
   - type: teleop
     sequence_list:
       - basket
-      - cable
-      - cleaner
+      - box
       - doll
       - hammer
       - pot
       - towel
-    train_dataset_ids: [0, 1, 2]
-    val_dataset_ids: [3]
+    train_dataset_ids: [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11]
+    val_dataset_ids: [11]
 
     dataset:
       _target_: tactile_ssl.data.brainco_tactile.BraincoSSLDataset

@@ -53,8 +53,9 @@ class BraincoDINOv2Module(DINOv2Module):
                         n=encoder.in_dim,
                     )
                     # in_dims corresponds to num sensors
-                    X_pred = einops.rearrange(X_pred, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=encoder.in_chans)
-                    X_orig = einops.rearrange(X_orig, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=encoder.in_chans)
+                    l = 4
+                    X_pred = einops.rearrange(X_pred, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=l)
+                    X_orig = einops.rearrange(X_orig, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=l)
                     X_pred = X_pred[0].cpu().numpy()[..., 0, :3]
                     X_orig = X_orig[0].cpu().numpy()[..., 0, :3]
                     signal_mean = self.teacher_encoder_dict["backbone"].signal_mean.detach().cpu().numpy()
@@ -127,6 +128,7 @@ class BraincoDINOv2Module(DINOv2Module):
     def forward(
         self,
         xs: torch.Tensor,
+        pos: torch.Tensor,
         global_masks: torch.Tensor,
         local_masks: torch.Tensor,
         ibot_masks: torch.Tensor,
@@ -139,10 +141,10 @@ class BraincoDINOv2Module(DINOv2Module):
 
         # TODO: @Akash Sharma - Raise to make sure context encoder implements taking masks as an argument
         student_global_dict = self.student_encoder_dict["backbone"].forward_features(
-            xs, masks=global_masks, mask_type="tubelet", masktoken_masks=ibot_masks
+            xs, pos, masks=global_masks, mask_type="tubelet", masktoken_masks=ibot_masks
         )
         student_local_dict = self.student_encoder_dict["backbone"].forward_features(
-            xs, masks=local_masks, mask_type="tubelet"
+            xs, pos, masks=local_masks, mask_type="tubelet"
         )
 
         student_global_cls_tokens = student_global_dict["x_norm_regtokens"][:, 0]
@@ -189,7 +191,7 @@ class BraincoDINOv2Module(DINOv2Module):
 
         with torch.no_grad():
             teacher_global_dict = self.teacher_encoder_dict["backbone"].forward_features(
-                xs, masks=global_masks, mask_type="tubelet"
+                xs, pos, masks=global_masks, mask_type="tubelet"
             )
             teacher_global_cls_tokens = teacher_global_dict["x_norm_regtokens"][:, 0]
 
@@ -279,9 +281,11 @@ class BraincoDINOv2Module(DINOv2Module):
         self.step = self.step + 1
         self.generator.manual_seed(self.step)
         x = batch["sensor"]
+        pos = batch["sensor_poses"]
+        # print(x.shape, pos.shape)
         global_masks, local_masks, ibot_masks = self.sample_masks(x)
 
-        loss = self.forward(x, global_masks, local_masks, ibot_masks)
+        loss = self.forward(x, pos, global_masks, local_masks, ibot_masks)
 
         output = {
             "ssl_loss": loss.item(),
@@ -292,7 +296,7 @@ class BraincoDINOv2Module(DINOv2Module):
         cls_embedding = None
         if len(self.online_probes) > 0:
             with torch.no_grad():
-                teacher_dict = self.teacher_encoder_dict["backbone"].forward_features(x)
+                teacher_dict = self.teacher_encoder_dict["backbone"].forward_features(x, pos)
                 cls_embedding = teacher_dict["x_norm_regtokens"].squeeze(1)
                 embedding = teacher_dict["x_norm_patchtokens"]
                 embedding = F.layer_norm(embedding, (embedding.size(-1),))
