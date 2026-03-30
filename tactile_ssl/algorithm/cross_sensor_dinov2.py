@@ -62,7 +62,7 @@ class CrossSensorDINOv2Module(DINOv2Module):
                         n=encoder.in_dim,
                     )
                 # in_dims corresponds to num sensors
-                print(X_pred.shape)
+                # print(X_pred.shape)
                 # X_pred is likely just Xela (3 channels) based on training_step logic
                 if X_pred.shape[-1] == 3:
                      # Already in Xela format, just add dim for consistency if needed, or skip rearrange
@@ -391,8 +391,16 @@ class CrossSensorDINOv2Module(DINOv2Module):
                 output[f"{probe_name}_loss"] = probe_loss.item()
                 output[f"{probe_name}_img"] = decoded_x[0].detach()
 
-            elif "classification" in probe_name:
-                gt_labels = batch[probe_name]
+            # elif "classification" in probe_name:
+            #     gt_labels = batch[probe_name]
+            #     probe_loss, pred_logits = probe(cls_embedding, target=gt_labels)
+            #     pred_labels = torch.argmax(pred_logits, dim=1)
+            #     accuracy = (pred_labels == gt_labels).float().mean()
+            #     online_probes_loss += probe_loss
+            #     output[f"{probe_name}_loss"] = probe_loss.item()
+            #     output[f"{probe_name}_accuracy"] = accuracy
+            elif "sensor_classification" in probe_name:
+                gt_labels = sensor_ids
                 probe_loss, pred_logits = probe(cls_embedding, target=gt_labels)
                 pred_labels = torch.argmax(pred_logits, dim=1)
                 accuracy = (pred_labels == gt_labels).float().mean()

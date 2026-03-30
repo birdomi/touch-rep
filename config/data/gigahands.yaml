@@ -1,0 +1,41 @@
+train_dataloader:
+  batch_size: 128
+  num_workers: 8
+  shuffle: True
+  drop_last: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 128
+  num_workers: 8
+  shuffle: False
+  drop_last: False
+  pin_memory: True
+  persistent_workers: True
+
+normalization:
+  mean: null   # populated at runtime by get_dataloaders_gigahands_based()
+  std: null
+
+object_classes: null
+object_class_weights: null
+
+sensor: gigahands
+
+# GigaHandsDataset parameters
+data_root: ${paths.data_root}/gigahands
+
+# window_size matches algorithm.encoder.sequence_length (=3)
+# → each sample contains 3 consecutive frames: (T=3, N=32, C=1)
+window_size: 3
+window_stride: 1
+
+# Only include frames where both hands have valid MANO pose
+filter_valid: both
+
+# Fraction of data used for training (rest → validation)
+train_val_split: 0.9
+
+# Optionally restrict to a subset of scenes (null = all 25 scenes)
+scenes: null

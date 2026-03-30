@@ -50,20 +50,20 @@ wd_scheduler_cfg:
   ref_weight_decay: 0.04
   T_max: ???
 
-online_probes:
-  - _target_: tactile_ssl.probe.OnlineProbeModule
-    probe_name: "reconstruction"
-    decoder:
-      _target_: tactile_ssl.probe.cross_sensor_reconstruction.CrossSensorSignalDecoderBase
-      in_dim: ${algorithm.encoder.in_dim}
-      in_chans: ${algorithm.encoder.in_chans}
-      sequence_length: ${algorithm.encoder.sequence_length}
-      time_chunk_size: ${algorithm.encoder.time_chunk_size}
-      input_embed_dim: ${model_embed_dim}
-      embed_dim: 192
-      depth: 4
-    loss_fn:
-      _target_: torch.nn.MSELoss
+online_probes: []
+  # - _target_: tactile_ssl.probe.OnlineProbeModule
+  #   probe_name: "reconstruction"
+  #   decoder:
+  #     _target_: tactile_ssl.probe.cross_sensor_reconstruction.CrossSensorSignalDecoderBase
+  #     in_dim: ${algorithm.encoder.in_dim}
+  #     in_chans: ${algorithm.encoder.in_chans}
+  #     sequence_length: ${algorithm.encoder.sequence_length}
+  #     time_chunk_size: ${algorithm.encoder.time_chunk_size}
+  #     input_embed_dim: ${model_embed_dim}
+  #     embed_dim: 192
+  #     depth: 4
+  #   loss_fn:
+  #     _target_: torch.nn.MSELoss
 
   # - _target_: tactile_ssl.probe.online_probe.OnlineProbeModule
   #   probe_name: "object_classification"
@@ -76,5 +76,5 @@ online_probes:
   #     _partial_: true
   #     _target_: torch.nn.CrossEntropyLoss
 
-online_probes_lrs: [1e-4]
+online_probes_lrs: []
 reconstruction_log_freq: 20

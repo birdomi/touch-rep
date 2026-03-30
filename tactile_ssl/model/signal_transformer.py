@@ -197,6 +197,7 @@ class SignalTransformer(nn.Module):
         masks,
         mask_type: Optional[Literal["block", "tubelet"]],
         masktoken_masks: Optional[List[torch.Tensor]],
+        skip_register: bool = False,
     ):
         t, n = x.shape[-3], x.shape[-2]
 
@@ -231,7 +232,7 @@ class SignalTransformer(nn.Module):
             x = self.apply_masktokens(x, masktoken_masks)
 
         x = einops.rearrange(x, "b t n c -> b (t n) c")
-        if self.register_tokens is not None:
+        if self.register_tokens is not None and not skip_register:
             x = torch.cat([self.register_tokens.expand(x.shape[0], -1, -1), x], dim=1)
 
         return x, attn_bias
@@ -268,7 +269,6 @@ class SignalTransformer(nn.Module):
         masktoken_masks: Optional[List[torch.Tensor]] = None,
     ):
         x = self.pre_embed(x)
-
         x, bias = self.prepare_tokens_with_mask(x, masks, mask_type, masktoken_masks)
         
         x_prenorm, x_postnorm = self.transform(x, bias)

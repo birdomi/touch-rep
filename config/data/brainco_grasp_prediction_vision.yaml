@@ -1,0 +1,28 @@
+train_dataloader:
+  batch_size: 32
+  num_workers: 4
+  shuffle: True
+  drop_last: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 32
+  num_workers: 4
+  shuffle: False
+  drop_last: False
+  pin_memory: True
+  persistent_workers: True
+
+sensor: brainco_grasp_vision
+train_data_budget: 1.0
+val_data_budget: 1.0
+
+window_time: 0.1
+window_overlap: 0.5
+interpolating_freq: 100
+
+num_frames_per_sample: 4
+img_size: 224
+
+data_path: ${paths.data_root}/brainco/downstream/grasp_prediction

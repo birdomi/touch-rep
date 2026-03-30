@@ -1,0 +1,29 @@
+# @package _global_
+defaults:
+  - override /data: brainco_xela_multi
+  - override /algorithm: multi_sensor_dinov2
+  - _self_
+
+model_size: tiny
+experiment_name: dinov2_multi_sensor_${model_size}
+ckpt_path: ./
+
+wandb:
+  entity: ryk012
+  project: brainco_dinov2
+  group: dino_multi_sensor_${model_size}
+  tags: ["multi_sensor", "brainco_xela", "${model_size}"]
+
+trainer:
+  max_epochs: 1000
+  validation_frequency: 50
+
+algorithm:
+  centering: centering
+  encoder:
+    _target_: tactile_ssl.model.multi_sensor_brainco_tiny
+    in_dim: 10
+    in_chans: 4
+    sequence_length: 1
+    time_chunk_size: 1
+    xela_num_frames: 10

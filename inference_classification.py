@@ -30,7 +30,9 @@ logger = get_pylogger(__name__)
 
 config = "config/encoder/xela_sparshskin.yaml"
 data_path = "config/data/xela.yaml"
-ckpt_path = "experiments/dinov2_xela_tiny/2026.01.28-17-59/checkpoints/last.ckpt"
+# ckpt_path = "experiments/dinov2_xela_tiny/2026.01.28-17-59/checkpoints/epoch-0050.ckpt"
+ckpt_path = "experiments/dinov2_xela_no_cls_tiny/2026.02.19-12-31/checkpoints/epoch-0470.ckpt"
+
 
 with open(data_path, "r") as f:
     data_cfg = yaml.safe_load(f)
@@ -145,11 +147,11 @@ def main():
             state_dict = checkpoint["model"]
         # print(state_dict.keys())
 
-        classifier_state_dict = {
-            'weight': state_dict['online_probes.1.decoder.probe.0.weight'],
-            'bias': state_dict['online_probes.1.decoder.probe.0.bias']
-        }
-        classifier.load_state_dict(classifier_state_dict, strict=True)
+        # classifier_state_dict = {
+        #     'weight': state_dict['online_probes.1.decoder.probe.0.weight'],
+        #     'bias': state_dict['online_probes.1.decoder.probe.0.bias']
+        # }
+        # classifier.load_state_dict(classifier_state_dict, strict=True)
 
             
         # Clean state dict keys if necessary (e.g. handle 'module.' or '_forward_module.' prefixes)
@@ -175,54 +177,54 @@ def main():
     criterion = nn.CrossEntropyLoss()
 
     ###  5. [NEW] Training Loop (Optional)
-    # epochs = 10  # 학습 에폭 수 설정
-    # logger.info(f"Starting training for {epochs} epochs...")
+    epochs = 10  # 학습 에폭 수 설정
+    logger.info(f"Starting training for {epochs} epochs...")
 
-    # for epoch in range(epochs):
-    #     # --- Training Phase ---
-    #     classifier.train()
-    #     total_loss = 0.0
-    #     correct = 0
-    #     total = 0
+    for epoch in range(epochs):
+        # --- Training Phase ---
+        classifier.train()
+        total_loss = 0.0
+        correct = 0
+        total = 0
         
-    #     for i, batch in enumerate(train_loader):
-    #         # Move batch to device
-    #         if isinstance(batch, dict):
-    #             batch = {k: v.to(device, dtype=torch.float32) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-    #         elif isinstance(batch, list):
-    #             batch = [v.to(device, dtype=torch.float32) if isinstance(v, torch.Tensor) else v for v in batch]
+        for i, batch in enumerate(train_loader):
+            # Move batch to device
+            if isinstance(batch, dict):
+                batch = {k: v.to(device, dtype=torch.float32) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            elif isinstance(batch, list):
+                batch = [v.to(device, dtype=torch.float32) if isinstance(v, torch.Tensor) else v for v in batch]
             
-    #         gt = batch['object_classification'].long() # 라벨은 LongTensor여야 함
+            gt = batch['object_classification'].long() # 라벨은 LongTensor여야 함
 
-    #         # 1. Extract Features (Frozen Encoder)
-    #         with torch.no_grad():
-    #             tactile_rep = model.forward_features(batch['sensor'])
-    #             cls_embedding = tactile_rep["x_norm_regtokens"].squeeze(1)
-    #             # patch_embedding = tactile_rep["x_norm_patchtokens"].mean(1)
-    #             # Concatenate features
-    #             features = cls_embedding
+            # 1. Extract Features (Frozen Encoder)
+            with torch.no_grad():
+                tactile_rep = model.forward_features(batch['sensor'])
+                cls_embedding = tactile_rep["x_norm_regtokens"].squeeze(1)
+                # patch_embedding = tactile_rep["x_norm_patchtokens"].mean(1)
+                # Concatenate features
+                features = cls_embedding
 
-    #         # 2. Forward Classifier
-    #         outputs = classifier(features)
-    #         loss = criterion(outputs, gt)
+            # 2. Forward Classifier
+            outputs = classifier(features)
+            loss = criterion(outputs, gt)
 
-    #         # 3. Backward & Optimize
-    #         optimizer.zero_grad()
-    #         loss.backward()
-    #         optimizer.step()
+            # 3. Backward & Optimize
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-    #         # Stats
-    #         total_loss += loss.item()
-    #         _, predicted = torch.max(outputs.data, 1)
-    #         total += gt.size(0)
-    #         correct += (predicted == gt).sum().item()
+            # Stats
+            total_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += gt.size(0)
+            correct += (predicted == gt).sum().item()
 
-    #         if i % 10 == 0:
-    #             logger.info(f"Epoch [{epoch+1}/{epochs}], Step [{i}/{len(train_loader)}], Loss: {loss.item():.4f}")
+            if i % 100 == 0:
+                logger.info(f"Epoch [{epoch+1}/{epochs}], Step [{i}/{len(train_loader)}], Loss: {loss.item():.4f}")
 
-    #     train_acc = 100 * correct / total
-    #     avg_loss = total_loss / len(train_loader)
-    #     logger.info(f"End of Epoch {epoch+1}: Train Loss: {avg_loss:.4f}, Train Acc: {train_acc:.2f}%")
+        train_acc = 100 * correct / total
+        avg_loss = total_loss / len(train_loader)
+        logger.info(f"End of Epoch {epoch+1}: Train Loss: {avg_loss:.4f}, Train Acc: {train_acc:.2f}%")
 
     # --- Validation Phase ---
     val_loss = 0

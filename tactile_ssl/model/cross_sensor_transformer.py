@@ -25,6 +25,91 @@ from tactile_ssl.utils import apply_masks
 
 log = get_pylogger(__name__)
 
+def visualize_mask_and_signal(x, masks, masked_x, sensor_ids, mask_type, save_prefix="sample"):
+    try:
+        import matplotlib.pyplot as plt
+        import os
+        import numpy as np
+
+        os.makedirs("visualizations", exist_ok=True)
+        
+        c_idx = 0 # arbitrary channel
+        
+        unique_sensors = sensor_ids.unique().tolist() if sensor_ids is not None else ['unknown']
+        
+        for s_id in unique_sensors:
+            if sensor_ids is not None:
+                b_indices = torch.where(sensor_ids == s_id)[0]
+                if len(b_indices) == 0: continue
+                b_idx = b_indices[0].item()
+            else:
+                b_idx = 0
+            
+            save_path = os.path.join("visualizations", f"{save_prefix}_sensor_{s_id}_{mask_type}.png")
+            
+            original = x[b_idx, :, :, c_idx].detach().cpu().numpy() # (T, N)
+            
+            fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+            
+            # 1. Original
+            im0 = axes[0].imshow(original.T, aspect='auto', cmap='viridis', interpolation='none')
+            axes[0].set_title(f"Original Signal (sensor {s_id})")
+            axes[0].set_xlabel("Time (T)")
+            axes[0].set_ylabel("Patches (N)")
+            fig.colorbar(im0, ax=axes[0])
+            
+            # 2. Mask and 4. Masked Full
+            if masks is not None and isinstance(masks, list) and len(masks) > 0:
+                mask = masks[0][b_idx].detach().cpu().numpy() # (N_keep,) or (T, N_keep)
+                bool_mask = np.zeros_like(original) # (T, N)
+                
+                try:
+                    if mask.ndim == 1:
+                        bool_mask[:, mask] = 1
+                    elif mask.ndim == 2:
+                        for t_i in range(min(mask.shape[0], bool_mask.shape[0])):
+                            bool_mask[t_i, mask[t_i]] = 1
+                except Exception as e:
+                    print(f"Mask projection failed: {e}")
+                
+                im1 = axes[1].imshow(bool_mask.T, aspect='auto', cmap='gray', interpolation='none', vmin=0, vmax=1)
+                axes[1].set_title("Mask (White=Keep)")
+                axes[1].set_xlabel("Time (T)")
+                axes[1].set_ylabel("Patches (N)")
+                fig.colorbar(im1, ax=axes[1])
+                
+                masked_full = original.copy()
+                masked_full[bool_mask == 0] = np.nan
+                im3 = axes[3].imshow(masked_full.T, aspect='auto', cmap='viridis', interpolation='none')
+                axes[3].set_title("Original (Tossed=NaN)")
+                axes[3].set_xlabel("Time (T)")
+                axes[3].set_ylabel("Patches (N)")
+                fig.colorbar(im3, ax=axes[3])
+            else:
+                axes[1].set_title("No Mask")
+                axes[3].set_title("No Mask")
+                
+            # 3. Masked Signal (Gathered)
+            try:
+                if isinstance(masked_x, torch.Tensor) and masked_x.dim() == 4:
+                    masked = masked_x[b_idx, :, :, c_idx].detach().cpu().numpy() # (T, N_keep)
+                    im2 = axes[2].imshow(masked.T, aspect='auto', cmap='viridis', interpolation='none')
+                    axes[2].set_title(f"Masked Gathered ({mask_type})")
+                    axes[2].set_xlabel("Time (T)")
+                    axes[2].set_ylabel("Kept Patches (N')")
+                    fig.colorbar(im2, ax=axes[2])
+                else:
+                    axes[2].set_title("Masked Format Untracked")
+            except Exception as e:
+                axes[2].set_title("Gather Failed")
+                 
+            plt.tight_layout()
+            plt.savefig(save_path)
+            plt.close()
+            print(f"Visualization saved to {save_path}")
+    except Exception as e:
+        print(f"Visualization failed: {e}")
+
 class SensorSpecificEmbed(nn.Module):
     def __init__(self, num_sensors, input_dim, hidden_dim):
         super().__init__()
@@ -199,7 +284,6 @@ class CrossSensorTransformer(SignalTransformer):
             means = normalization.mean
             stds = normalization.std
 
-            # shape (num_sensor, 1, in_dim, in_chans)
             means_tensor = torch.zeros(self.num_sensors, 1, self.in_dim, self.in_chans)
             stds_tensor = torch.ones(self.num_sensors, 1, self.in_dim, self.in_chans)
 
@@ -235,6 +319,7 @@ class CrossSensorTransformer(SignalTransformer):
         if hasattr(self, "xela_mean") and hasattr(self, "xela_std"):
             # x: (B, T, N, C_total)
             x = einops.rearrange(x, "b t n (k c) -> b t n k c", c=self.in_chans)
+            # print(x.shape)
             
             if sensor_ids is not None:
                 # self.xela_mean: (S, 1, N, C)
@@ -245,6 +330,8 @@ class CrossSensorTransformer(SignalTransformer):
                 # Reshape for broadcasting with (B, T, N, K, C)
                 target_means = target_means.unsqueeze(-2) # (B, 1, N, 1, C)
                 target_stds = target_stds.unsqueeze(-2)   # (B, 1, N, 1, C)
+                # print(target_means.shape, target_stds.shape)
+                # print(target_means[:,:,:,:,:6])
                 
                 x = (x - target_means) / target_stds
             else:
@@ -311,11 +398,21 @@ class CrossSensorTransformer(SignalTransformer):
         pos_embed = pos_embed[sensor_ids]
         x = x + pos_embed
 
+        original_x_for_vis = x.clone()
+        original_sensor_ids_for_vis = sensor_ids.clone() if sensor_ids is not None else None
+
         if masks is not None:
             if mask_type == "tubelet":
                 x, sensor_ids = self.apply_tubelet_masks(x, masks, sensor_ids)
             elif mask_type == "block":
                 x, sensor_ids = self.apply_block_masks(x, masks, sensor_ids)
+
+            # if not hasattr(self, '_mask_vis_counter'):
+            #     self._mask_vis_counter = 0
+                
+            # if self._mask_vis_counter % 100 == 0:
+            #     visualize_mask_and_signal(original_x_for_vis, masks, x, original_sensor_ids_for_vis, mask_type, save_prefix=f"sample_iter_{self._mask_vis_counter}")
+            # self._mask_vis_counter += 1
         if self.causal:
             attn_bias = self.create_causal_mask(x)
         else:

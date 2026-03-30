@@ -1,0 +1,56 @@
+train_dataloader:
+  batch_size: 64
+  num_workers: 8
+  shuffle: True
+  drop_last: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 8
+  shuffle: True
+  drop_last: True
+  pin_memory: True
+  persistent_workers: True
+
+normalization:
+  mean: null
+  std: null
+object_classes: null
+object_class_weights: null
+
+# T=50: 50 consecutive frames per window at 100 Hz → encoder sees 0.5s of context
+# MultiSensorTransformer: sequence_length=50, time_chunk_size=5 → 10 temporal chunks
+window_time: 0.03
+window_overlap: 0.0
+interpolating_freq: 100
+
+# brainco_xela 라우팅 → SensorIdDatasetWrapper(sensor_id=0) 자동 주입
+sensor: brainco_xela
+dataset_list:
+  - sensor_type: brainco
+    type: teleop
+    sequence_list:
+      - basket
+      - box
+      - doll
+      - hammer
+      - pot
+      - towel
+    train_dataset_ids: [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11]
+    val_dataset_ids: [11]
+
+    dataset:
+      _target_: tactile_ssl.data.brainco_tactile.BraincoSSLDataset
+      config:
+        window_time: ${data.window_time}
+        window_overlap: ${data.window_overlap}
+        interpolating_freq: ${data.interpolating_freq}
+        subtract_baseline: False
+        smooth_data: False
+        bias_noise_std: 0
+        bias_range: 0
+      data_path: ${paths.data_root}/brainco/pretraining/
+      brainco_urdf_path: ${paths.data_root}/brainco/urdf/
+      load_images: False

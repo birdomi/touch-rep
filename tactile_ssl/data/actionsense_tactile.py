@@ -116,7 +116,7 @@ class ActionSenseSSLDataset(data.Dataset):
         sample_dict = {
             "sensor": sensor_tensor,
             "sensor_poses": poses_tensor,
-            "object_classification": int(class_id)
+            "object_classification": torch.tensor(class_id)
         }
         return sample_dict
 

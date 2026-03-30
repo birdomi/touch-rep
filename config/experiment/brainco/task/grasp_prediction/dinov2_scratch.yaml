@@ -1,0 +1,22 @@
+# @package _global_
+defaults:
+  - override /data: brainco_grasp_prediction
+  - override /task: brainco_grasp_prediction
+  - _self_
+
+ssl_name: dinov2
+sensor: brainco
+experiment_name: grasp_prediction_scratch
+ckpt_path: ./
+
+resume_id: ~
+train_data_budget: 1.0
+val_data_budget: 1.0
+
+fold: 0       # 0-indexed fold to use as validation set
+num_folds: 5  # 5-fold → 80% train / 20% val by episode
+
+task:
+  checkpoint_encoder: ~
+  checkpoint_task: ~
+  train_encoder: true

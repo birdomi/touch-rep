@@ -91,6 +91,7 @@ class CrossSensorDatasetWrapper(data.Dataset):
         new_sample["sensor_poses"] = sensor_poses
         new_sample["sensor_ids"] = torch.tensor(self.sensor_id, dtype=torch.long)
         new_sample["valid_mask"] = valid_mask
+        new_sample["object_classification"] = sample["object_classification"]
         return new_sample
 
     def __len__(self):

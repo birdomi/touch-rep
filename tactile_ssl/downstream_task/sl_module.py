@@ -91,7 +91,7 @@ class SLModule(Module, nn.Module):
             new_key: checkpoint["model"][target_key] for new_key, target_key in zip(new_keys, target_keys)
         }
         # load the state_dict into the model
-        self.model_encoder.load_state_dict(new_state_dict, strict=True)
+        self.model_encoder.load_state_dict(new_state_dict, strict=False)
         # log.info(f"Loaded encoder from {checkpoint_encoder}")
         print(f"Loaded encoder from {checkpoint_encoder}")
 

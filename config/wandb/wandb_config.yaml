@@ -1,5 +1,5 @@
-project: tactile_ssl
-entity: sparsh
+project: brainco_pretraining
+entity: ryk9012-gwangju-institute-of-science-and-technology
 save_dir: ${paths.output_dir}
 id: ${hydra:job.id}_${experiment_name}
 tags: []

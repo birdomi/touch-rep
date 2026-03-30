@@ -254,6 +254,11 @@ class Trainer:
         # reset for next fit call
         self.should_stop = False
 
+        # Run final validation if the last training epoch was not a validation epoch
+        last_epoch = self.current_epoch - 1
+        if last_epoch % self.validation_frequency != 0:
+            self.val_loop(module, val_loader, limit_batches=self.limit_val_batches)
+
     def train_loop(
         self,
         module: Module,
@@ -562,7 +567,6 @@ class Trainer:
             state: A mapping containing model, optimizer and lr scheduler.
 
         """
-
         if self.max_task_checkpoints is not None:
             if self.save_probe_weights_only:
                 # save only model weights that start with model_task
@@ -711,10 +715,10 @@ class Trainer:
             postfix_str = ""
             float_candidates = apply_to_collection(candidates, torch.Tensor, lambda x: x.item())
             if isinstance(candidates, torch.Tensor):
-                postfix_str += f" {prefix}_loss: {float_candidates:.3f}"
+                postfix_str += f" {prefix}_loss: {float_candidates:.5f}"
             elif isinstance(candidates, Mapping):
                 for k, v in float_candidates.items():
-                    postfix_str += f" {prefix}_{k}: {v:.3f}"
+                    postfix_str += f" {prefix}_{k}: {v:.5f}"
 
             if postfix_str:
                 prog_bar.set_postfix_str(postfix_str)

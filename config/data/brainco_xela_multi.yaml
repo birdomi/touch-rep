@@ -1,0 +1,89 @@
+train_dataloader:
+  batch_size: 64
+  num_workers: 8
+  shuffle: True
+  drop_last: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 8
+  shuffle: True
+  drop_last: True
+  pin_memory: True
+  persistent_workers: True
+
+normalization:
+  mean: null # populated in train.py
+  std: null  # populated in train.py
+object_classes: null
+object_class_weights: null
+
+sensor: brainco_xela
+
+dataset_list:
+  # ── BrainCo hand (10 fingertip sensors × 4 channels) ─────────────────────
+  - sensor_type: brainco
+    type: teleop
+    sequence_list:
+      - basket
+      - box
+      - doll
+      - hammer
+      - pot
+      - towel
+    train_dataset_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    val_dataset_ids: [11]
+
+    dataset:
+      _target_: tactile_ssl.data.brainco_tactile.BraincoSSLDataset
+      config:
+        window_time: 0.1
+        window_overlap: 0.0
+        interpolating_freq: 30
+        subtract_baseline: False
+        smooth_data: False
+        bias_noise_std: 0
+        bias_range: 0
+      data_path: ${paths.data_root}/brainco/pretraining/
+      brainco_urdf_path: ${paths.data_root}/brainco/urdf/
+      load_images: False
+
+  # ── XELA (368 taxels grouped into 10 tokens × 4 channels) ────────────────
+  - sensor_type: xela_grouped
+    type: teleop
+    sequence_list:
+      - corn
+      - rubikscube
+      - metalcup
+      - cup
+      - ball
+      - drill
+      - mustard
+      - lego
+      - pringle
+      - legopool
+      - watermelon
+      - popcorn
+      - loofah
+      - slipper
+    train_dataset_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    val_dataset_ids: [9]
+
+    dataset:
+      _target_: tactile_ssl.data.xela_tactile_grouped.XelaSSLDatasetGrouped
+      config:
+        window_time: 0.1
+        window_overlap: 0.0
+        interpolating_freq: 100
+        subtract_baseline: True
+        smooth_data: False
+        bias_noise_std: 0
+        bias_range: 0
+        sparse_seq: true              # BrainCo seq 맞춤: offset 프레임만 선택
+        sparse_seq_offsets: [-9, -4, 0]  # 마지막 프레임 기준 → seq=3
+      data_path: ${paths.data_root}/sparsh-skin-dataset/pretraining/
+      baseline_signal_path: ${paths.data_root}/sparsh-skin-dataset/pretraining/baseline/xela/data.pkl
+      xela_urdf_path: ${paths.data_root}/sparsh-skin-dataset/pretraining/urdf/ahrcpcpn.urdf
+      load_images: False

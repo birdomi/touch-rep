@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - override /data: brainco_grasp
+  - override /task: brainco_grasp_detection
+  - _self_
+
+ssl_name: dinov2
+sensor: brainco
+experiment_name: grasp_detection
+ckpt_path: ./
+
+resume_id: ~
+train_data_budget: 1.0
+val_data_budget: 1.0
+
+task:
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_brainco_tiny/epoch-0300.ckpt
