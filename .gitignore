@@ -8,6 +8,7 @@ sparsh-skin-dataset/*
 dataset/*
 assets/*
 experiments/*
+pretraining_dataset/*
 # C extensions
 *.so
 
