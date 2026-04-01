@@ -23,5 +23,4 @@ sensor: oakinkv2
 data_root: pretraining_dataset/OakInkv2
 window_size: 3
 window_stride: 1
-train_val_split: 0.9
-scenes: null   # 예: ['scene_01'] 로 특정 scene만 제한 가능
+train_val_split: 1.0

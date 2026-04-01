@@ -21,8 +21,8 @@ normalization:
 sensor: brainco_grasp_prediction
 train_val_split: 0.8
 
-window_time: 0.1
-window_overlap: 0.5
+window_time: 0.15
+window_overlap: 0.0
 interpolating_freq: 100
 
 dataset:
@@ -35,5 +35,6 @@ dataset:
     smooth_data: False
     bias_noise_std: 0
     bias_range: 0
+    pose_type: fingertip
   data_path: ${paths.data_root}/brainco/downstream/grasp_prediction
   brainco_urdf_path: ${paths.data_root}/brainco/urdf/

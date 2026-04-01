@@ -135,6 +135,7 @@ class MultiSensorDINOv2Module(BraincoDINOv2Module):
         self,
         xs: torch.Tensor,
         pos: torch.Tensor,
+        wrist_poses: Optional[torch.Tensor],
         sensor_ids: torch.Tensor,
         global_masks: torch.Tensor,
         local_masks: torch.Tensor,
@@ -154,12 +155,12 @@ class MultiSensorDINOv2Module(BraincoDINOv2Module):
         num_ibot_tokens   = len(ibot_mask_indices)
 
         student_global_dict = self.student_encoder_dict["backbone"].forward_features(
-            xs, pos, sensor_ids=sensor_ids,
+            xs, pos, wrist_poses=wrist_poses, sensor_ids=sensor_ids,
             masks=global_masks, mask_type="tubelet", masktoken_masks=ibot_masks,
             pos_masks=pos_global_masks,
         )
         student_local_dict = self.student_encoder_dict["backbone"].forward_features(
-            xs, pos, sensor_ids=sensor_ids,
+            xs, pos, wrist_poses=wrist_poses, sensor_ids=sensor_ids,
             masks=local_masks, mask_type="tubelet",
             pos_masks=pos_local_masks,
         )
@@ -207,7 +208,7 @@ class MultiSensorDINOv2Module(BraincoDINOv2Module):
 
         with torch.no_grad():
             teacher_global_dict = self.teacher_encoder_dict["backbone"].forward_features(
-                xs, pos, sensor_ids=sensor_ids,
+                xs, pos, wrist_poses=wrist_poses, sensor_ids=sensor_ids,
                 masks=global_masks, mask_type="tubelet",
                 pos_masks=pos_global_masks,
             )
@@ -307,6 +308,7 @@ class MultiSensorDINOv2Module(BraincoDINOv2Module):
 
         x          = batch["sensor"]        # (B, T, N, C_max)
         pos        = batch["sensor_poses"]  # (B, T, N, 6)
+        wrist_poses = batch.get("wrist_poses", None)
         sensor_ids = batch["sensor_id"]     # (B,)
         
         # print(x.shape, pos.shape, sensor_ids.shape)
@@ -314,7 +316,7 @@ class MultiSensorDINOv2Module(BraincoDINOv2Module):
         global_masks, local_masks, ibot_masks, \
             pos_global_masks, pos_local_masks, full_ibot = self.sample_masks(x)
         loss = self.forward(
-            x, pos, sensor_ids,
+            x, pos, wrist_poses, sensor_ids,
             global_masks, local_masks, ibot_masks,
             pos_global_masks, pos_local_masks, full_ibot,
         )
@@ -333,7 +335,7 @@ class MultiSensorDINOv2Module(BraincoDINOv2Module):
         if len(self.online_probes) > 0:
             with torch.no_grad():
                 teacher_dict = self.teacher_encoder_dict["backbone"].forward_features(
-                    x, pos, sensor_ids=sensor_ids
+                    x, pos, wrist_poses=wrist_poses, sensor_ids=sensor_ids
                 )
                 cls_embedding = teacher_dict["x_norm_regtokens"].squeeze(1)
                 embedding     = teacher_dict["x_norm_patchtokens"]

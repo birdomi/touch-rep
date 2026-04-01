@@ -35,17 +35,16 @@ task:
   xela_num_frames: 10
 
   model_encoder:
-    _target_: tactile_ssl.model.multi_sensor_brainco_tiny
+    _target_: tactile_ssl.model.multi_sensor_tiny
     in_dim: 10
     in_chans: 4
-    sequence_length: 1
-    time_chunk_size: 1
+    sequence_length: 3
+    time_chunk_size: 3
     pos_embed_fn: learned
     num_register_tokens: 1
-    with_masktoken: False
+    with_masktoken: false
     drop_path_rate: 0.0
     causal: False
-    xela_num_frames: 10
 
   model_task:
     _target_: tactile_ssl.downstream_task.AttentiveClassifier

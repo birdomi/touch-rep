@@ -52,7 +52,7 @@ class MultiSensorGraspDetectionSLModule(BraincoGraspDetectionSLModule):
             self._apply_partial_finetune(finetune_modules)
 
     def _apply_partial_finetune(self, finetune_modules: List[str]):
-        """Freeze entire encoder, then selectively unfreeze listed submodules."""
+        """Freeze entire encoder, then selectively unfreeze listed submodules and LoRA params."""
         # Step 1: freeze everything
         self.model_encoder.requires_grad_(False)
 
@@ -70,12 +70,21 @@ class MultiSensorGraspDetectionSLModule(BraincoGraspDetectionSLModule):
             except AttributeError:
                 log.warning(f"Partial finetune: '{mod_name}' not found in encoder, skipping")
 
+        # Step 3: always keep LoRA params trainable if present
+        lora_params = 0
+        for name, param in self.model_encoder.named_parameters():
+            if "lora_" in name:
+                param.requires_grad_(True)
+                lora_params += param.numel()
+        if lora_params:
+            log.info(f"Partial finetune: also keeping {lora_params:,} LoRA params trainable")
+
         total_enc = sum(p.numel() for p in self.model_encoder.parameters())
         log.info(
-            f"Partial finetune: {unfrozen_params:,} / {total_enc:,} encoder params trainable"
+            f"Partial finetune: {unfrozen_params + lora_params:,} / {total_enc:,} encoder params trainable"
         )
 
-    def encode(self, sensor, sensor_poses, mask=None):
+    def encode(self, sensor, sensor_poses, wrist_poses=None, mask=None):
         """Encode windowed BrainCo tactile data through MultiSensorBraincoTransformer.
 
         Supports both single-timestep (sequence_length=1) and multi-timestep
@@ -84,14 +93,17 @@ class MultiSensorGraspDetectionSLModule(BraincoGraspDetectionSLModule):
         encoder can capture intra-window temporal dynamics.
 
         Args:
-            sensor:       (B, W, N, C)  C=4 for BrainCo grasp data
-            sensor_poses: (B, W, N, 6)
+            sensor:       (B, W, N, C)   C=4 for BrainCo grasp data
+            sensor_poses: (B, W, N, 3)   fingertip 3D position (wrist-local)
+            wrist_poses:  (B, W, 2, 9)   wrist poses [translation(3)+rot6d(6)],
+                          or None to fall back to learned register token
             mask:         (B, W) boolean mask for valid windows
 
         Returns:
             window_tokens: (B, W // T, embed_dim)  where T = encoder sequence_length
         """
         B, W, N, C = sensor.shape
+        _, _, N_pos, _ = sensor_poses.shape
         T = self.model_encoder.sequence_length   # 1 for standard, 5 for temporal
 
         assert W % T == 0, (
@@ -100,7 +112,11 @@ class MultiSensorGraspDetectionSLModule(BraincoGraspDetectionSLModule):
         G = W // T   # number of temporal groups per sample
 
         sensor_input = sensor.view(B * G, T, N, C)
-        poses_input  = sensor_poses.view(B * G, T, N, 6)
+        poses_input  = sensor_poses.view(B * G, T, N_pos, 3)
+
+        wrist_input = None
+        if wrist_poses is not None:
+            wrist_input = wrist_poses.view(B * G, T, 2, 9)
 
         # Pad channels from in_chans → max_channels (e.g. 4 → 40)
         if C < self._max_channels:
@@ -111,7 +127,9 @@ class MultiSensorGraspDetectionSLModule(BraincoGraspDetectionSLModule):
 
         with torch.no_grad() if not self.train_encoder else torch.enable_grad():
             out = self.model_encoder.forward_features(
-                sensor_input, poses_input, sensor_ids=sensor_ids
+                sensor_input, poses_input,
+                wrist_poses=wrist_input,
+                sensor_ids=sensor_ids,
             )
             x_tokens = out["x_tokens"]   # (B*G, num_tokens, embed_dim)
 
@@ -124,3 +142,18 @@ class MultiSensorGraspDetectionSLModule(BraincoGraspDetectionSLModule):
             window_tokens = window_tokens * mask_grouped.unsqueeze(-1)
 
         return window_tokens
+
+    def forward(self, batch):
+        sensor       = batch["sensor"]
+        sensor_poses = batch["sensor_poses"]
+        wrist_poses  = batch.get("wrist_poses", None)
+        mask         = batch.get("mask", None)
+
+        embeddings = self.encode(sensor, sensor_poses, wrist_poses=wrist_poses, mask=mask)
+
+        if self.train_encoder:
+            logits = self.classifier(embeddings)
+        else:
+            logits = self.classifier(embeddings.detach())
+
+        return logits

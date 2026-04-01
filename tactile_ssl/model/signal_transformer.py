@@ -211,10 +211,11 @@ class SignalTransformer(nn.Module):
             pos_embed = self.pos_embed.float()
         else:
             raise NotImplementedError("Unknown position embeding function")
+        
+        # print(x.shape, pos_embed.shape)
 
         pos_embed = einops.rearrange(pos_embed, "1 (t n) c -> 1 t n c", n=n)
         x = x + pos_embed[:, :t]
-        # print(x.shape, masks.shape)
 
         if masks is not None:
             if mask_type == "tubelet":

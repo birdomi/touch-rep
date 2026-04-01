@@ -31,6 +31,10 @@ class SLModule(Module, nn.Module):
         checkpoint_task: Optional[str] = None,
         train_encoder: bool = False,
         encoder_type: str = "jepa",
+        lora_rank: int = 0,
+        lora_alpha: float = 1.0,
+        lora_dropout: float = 0.0,
+        lora_target_modules: tuple = ("qkv", "proj"),
     ) -> None:
         super().__init__()
         self.model_task: nn.Module = model_task
@@ -48,10 +52,32 @@ class SLModule(Module, nn.Module):
             log.info("Loading task decoder from checkpoint.")
             self.load_task(checkpoint_task)
 
-        # freeze encoder
+        # ── LoRA ──────────────────────────────────────────────────────────────
+        if lora_rank > 0:
+            from tactile_ssl.model.lora import apply_lora, lora_trainable_params
+            n = apply_lora(
+                self.model_encoder,
+                rank=lora_rank,
+                alpha=lora_alpha,
+                dropout=lora_dropout,
+                target_modules=tuple(lora_target_modules),
+            )
+            log.info(f"LoRA applied to {n} layers (rank={lora_rank}, alpha={lora_alpha})")
+
+        # Freeze encoder; if LoRA, unfreeze only lora_ params
         if not self.train_encoder:
             self.model_encoder.requires_grad_(False)
             self.model_encoder.eval()
+
+        if lora_rank > 0:
+            for name, param in self.model_encoder.named_parameters():
+                if "lora_" in name:
+                    param.requires_grad_(True)
+            self.model_encoder.train()  # enable dropout in LoRA layers
+            n_lora = sum(p.numel() for n, p in self.model_encoder.named_parameters()
+                         if p.requires_grad and "lora_" in n)
+            log.info(f"LoRA trainable encoder params: {n_lora:,}")
+
         self.scheduler_partial = scheduler_cfg
         self.optim_partial = optim_cfg
 
@@ -86,13 +112,20 @@ class SLModule(Module, nn.Module):
         target_keys = [key for key in checkpoint["model"].keys() if encoder_key in key]
         # remove the prefix from the keys
         new_keys = [key.replace(f"{encoder_key}.", "") for key in target_keys]
-        # create a state_dict  with keys target_keys from the checkpoint
+        # create a state_dict with keys from the checkpoint
         new_state_dict = {
             new_key: checkpoint["model"][target_key] for new_key, target_key in zip(new_keys, target_keys)
         }
-        # load the state_dict into the model
-        self.model_encoder.load_state_dict(new_state_dict, strict=False)
-        # log.info(f"Loaded encoder from {checkpoint_encoder}")
+        # filter out shape-mismatched keys (strict=False skips missing keys but still errors on shape mismatch)
+        model_state = self.model_encoder.state_dict()
+        filtered_state_dict = {
+            k: v for k, v in new_state_dict.items()
+            if k in model_state and v.shape == model_state[k].shape
+        }
+        skipped = [k for k in new_state_dict if k not in filtered_state_dict]
+        if skipped:
+            log.info(f"Skipped {len(skipped)} shape-mismatched keys: {skipped}")
+        self.model_encoder.load_state_dict(filtered_state_dict, strict=False)
         print(f"Loaded encoder from {checkpoint_encoder}")
 
     def forward(self, x, *args, **kwargs):  # noqa

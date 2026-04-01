@@ -47,6 +47,13 @@ NUM_SENSORS = 2
 SENSOR_ID_BRAINCO = 0
 SENSOR_ID_XELA = 1
 
+# Full skeleton layout (42 joints per SKELETON_JOINTS definition)
+# Touch-link indices (0-indexed) where tactile sensors are physically placed
+# Left hand:  thumb=4, index=8,  middle=12, ring=16, pinky=20
+# Right hand: thumb=25,index=29, middle=33, ring=37, pinky=41
+FULL_SKELETON_SIZE = 42
+TACTILE_SENSOR_IDXS = [4, 8, 12, 16, 20, 25, 29, 33, 37, 41]
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -131,16 +138,21 @@ class MultiSensorTransformer(SignalTransformer):
         drop_path_rate: float = 0.0,
         drop_path_uniform: bool = False,
         with_masktoken: bool = False,
+        use_null_token: bool = False,
         causal: bool = False,
         pre_fusion_depth: Optional[int] = None,
         normalization: Optional[DictConfig] = None,
+        pos_normalization: Optional[DictConfig] = None,
     ):
         assert sequence_length % time_chunk_size == 0, (
             f"sequence_length({sequence_length}) must be divisible by time_chunk_size({time_chunk_size})"
         )
+        self.use_null_token = use_null_token
+        if self.use_null_token:
+            with_masktoken = True  # null token 사용 시 mask token도 필요
 
         # ── SignalTransformer 초기화 ──────────────────────────────────────
-        # blocks, norm, pos_embed, register_tokens, mask_token 생성
+        # blocks, norm, pos_embed, register_tokens, mask_tok en 생성
         super().__init__(
             in_dim=in_dim,
             in_chans=in_chans,
@@ -175,6 +187,16 @@ class MultiSensorTransformer(SignalTransformer):
         D     = embed_dim
         num_chunks = seq // chunk
 
+        if self.use_null_token:
+            log.info("using null token, changing pos_embed size to FULL_SKELETON_SIZE")
+            self.pos_embed = nn.Parameter(
+                torch.zeros(
+                    1,
+                    (self.sequence_length // self.time_chunk_size) * FULL_SKELETON_SIZE,
+                    self.embed_dim,
+                )
+            )
+
         # ── PatchEmbed1d: sensor stream ───────────────────────────────────
         # BrainCo: Conv1d(4 → D, kernel=chunk, stride=chunk)
         # XELA:    Conv1d(4 → D, kernel=chunk, stride=chunk)  — seq_len만 다름
@@ -185,7 +207,11 @@ class MultiSensorTransformer(SignalTransformer):
 
         # ── PatchEmbed1d: position stream (fingertip 6D pose) ─────────────
         # Conv1d(6 → D, kernel=chunk, stride=chunk)
-        self.position_embed = _make_embed1d(6, seq, chunk, D)
+        self.position_embed = _make_embed1d(3, seq, chunk, D)
+
+        # ── Wrist register token embedding: concat(left_9d, right_9d) → D ──
+        # Input: (B, T, 2, 9) → reshape (B, T, 18) → Linear → mean over T → (B, 1, D)
+        self.wrist_embed = nn.Linear(18, D)
 
         # ── sensor_block: per-sensor pre-fusion transformer blocks ─────────
         def _make_sensor_blocks() -> nn.ModuleList:
@@ -212,6 +238,7 @@ class MultiSensorTransformer(SignalTransformer):
             _make_sensor_blocks() for _ in range(NUM_SENSORS)
         ])
 
+
         # ── Per-sensor normalization buffers: (NUM_SENSORS, in_chans) ─────
         if normalization is not None:
             m = torch.tensor(normalization.mean, dtype=torch.float32)
@@ -224,6 +251,16 @@ class MultiSensorTransformer(SignalTransformer):
             s = torch.ones(NUM_SENSORS, in_chans)
         self.register_buffer("signal_mean", m)   # (2, 4)
         self.register_buffer("signal_std",  s)   # (2, 4)
+
+        # ── Per-channel pose normalization buffers: (3,) ──────────────────
+        if pos_normalization is not None:
+            pm = torch.tensor(pos_normalization.mean, dtype=torch.float32)
+            ps = torch.tensor(pos_normalization.std,  dtype=torch.float32)
+        else:
+            pm = torch.zeros(3)
+            ps = torch.ones(3)
+        self.register_buffer("pos_mean", pm)   # (3,)
+        self.register_buffer("pos_std",  ps)   # (3,)
 
         self.init_weights()
 
@@ -270,6 +307,39 @@ class MultiSensorTransformer(SignalTransformer):
 
         return out
 
+    # ── null token expansion ──────────────────────────────────────────────────
+
+    def expand_to_skeleton(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Expand tactile-only input to full skeleton space and generate null mask.
+
+        Tactile sensors exist only at TACTILE_SENSOR_IDXS (10 positions) out of
+        FULL_SKELETON_SIZE (42) joints.  All other positions are zero-filled and
+        marked in the returned mask so they can later be replaced with mask_token.
+
+        Args:
+            x: (B, T, 10, C)  — tactile sensor data for the 10 fingertips
+
+        Returns:
+            x_full        : (B, T, 42, C)   — zeros at non-tactile positions
+            masktoken_mask: (1, B, 42) bool  — True = null position (no sensor)
+        """
+        B, T, N, C = x.shape
+        assert N == len(TACTILE_SENSOR_IDXS), (
+            f"Expected {len(TACTILE_SENSOR_IDXS)} tactile sensors, got {N}"
+        )
+        x_full = torch.zeros(B, T, FULL_SKELETON_SIZE, C, device=x.device, dtype=x.dtype)
+        x_full[:, :, TACTILE_SENSOR_IDXS, :] = x
+
+        # True  → null position (no tactile sensor, will be replaced with mask_token)
+        # False → valid tactile position
+        null_mask = torch.ones(B, FULL_SKELETON_SIZE, dtype=torch.bool, device=x.device)
+        null_mask[:, TACTILE_SENSOR_IDXS] = False
+        masktoken_mask = null_mask.unsqueeze(0)  # (1, B, 42)
+
+        return x_full, masktoken_mask
+
     # ── sensor embedding ──────────────────────────────────────────────────────
 
     def pre_embed(
@@ -315,21 +385,24 @@ class MultiSensorTransformer(SignalTransformer):
                 self.patch_embed[sid],
                 B_s, N,
             )
+
         return out
 
     # ── position embedding ────────────────────────────────────────────────────
 
     def pre_pos_embed(self, pos: torch.Tensor) -> torch.Tensor:
-        """PatchEmbed1d for fingertip 6D pose.
+        """Normalize + PatchEmbed1d for fingertip 3D pose.
 
         Args:
-            pos: (B, T, N, 6)
+            pos: (B, T, N, 3) or (B, T, N, 6) — only first 3 channels (xyz) used
 
         Returns:
             (B, num_chunks, N, embed_dim)
         """
         B, _, N, _ = pos.shape
-        return _apply_embed1d(pos, self.position_embed, B, N)
+        pos_xyz = pos[..., :3].clone()
+        pos_xyz = (pos_xyz - self.pos_mean) / self.pos_std
+        return _apply_embed1d(pos_xyz, self.position_embed, B, N)
 
     # ── per-sensor pre-fusion blocks ──────────────────────────────────────────
 
@@ -399,12 +472,66 @@ class MultiSensorTransformer(SignalTransformer):
         x_norm = self.norm(fused)
         return x, x_norm
 
+    def prepare_tokens_with_mask(
+        self,
+        x,
+        masks,
+        mask_type: Optional[Literal["block", "tubelet"]],
+        masktoken_masks: Optional[List[torch.Tensor]],
+        skip_register: bool = False,
+    ):
+        t, n = x.shape[-3], x.shape[-2]
+        # print('##', x.shape, self.pos_embed.shape, self.pos_embed_fn)
+
+        assert t <= self.sequence_length, (
+            f"Input sequence length {t} is greater than model sequence length {self.sequence_length}"
+        )
+
+        if self.pos_embed_fn == "sinusoidal":
+            pos_embed = self.pos_embed(x.device).float().unsqueeze(0)
+        elif self.pos_embed_fn == "learned":
+            pos_embed = self.pos_embed.float()
+            if n != pos_embed.shape[1]:
+                # pos_embed이 42-sized(use_null_token=True)이지만 입력이 10 tactile 센서일 때만 필터링
+                # use_null_token=False → pos_embed이 in_dim-sized → TACTILE_SENSOR_IDXS(max=41) OOB
+                pos_embed = pos_embed[:, TACTILE_SENSOR_IDXS, :]
+
+        else:
+            raise NotImplementedError("Unknown position embeding function")
+        
+        # print(x.shape, pos_embed.shape)
+
+        pos_embed = einops.rearrange(pos_embed, "1 (t n) c -> 1 t n c", n=n)
+        x = x + pos_embed[:, :t]
+
+        if masks is not None:
+            if mask_type == "tubelet":
+                x = self.apply_tubelet_masks(x, masks)
+            elif mask_type == "block":
+                x = apply_masks(x, masks)
+            else:
+                raise NotImplementedError(f"Unknown mask type {mask_type}")
+        if self.causal:
+            attn_bias = self.create_causal_mask(x)
+        else:
+            attn_bias = None
+
+        if masktoken_masks is not None:
+            x = self.apply_masktokens(x, masktoken_masks)
+
+        x = einops.rearrange(x, "b t n c -> b (t n) c")
+        if self.register_tokens is not None and not skip_register:
+            x = torch.cat([self.register_tokens.expand(x.shape[0], -1, -1), x], dim=1)
+
+        return x, attn_bias
+
     # ── forward ───────────────────────────────────────────────────────────────
 
     def forward_features(
         self,
         x: torch.Tensor,
         pos: torch.Tensor,
+        wrist_poses: Optional[torch.Tensor] = None,
         sensor_ids: Optional[torch.Tensor] = None,
         masks: Optional[torch.Tensor] = None,
         mask_type: Optional[Literal["block", "tubelet"]] = None,
@@ -414,13 +541,17 @@ class MultiSensorTransformer(SignalTransformer):
         """전체 forward pass.
 
         Args:
-            x:          (B, T, N, C_max)  sensor data
-            pos:        (B, T, N, 6)      fingertip 6D pose
-            sensor_ids: (B,) long         sensor type per sample
-            masks:      sensor stream masking (x 전용)
-            mask_type:  "block" or "tubelet"
+            x:           (B, T, N, C_max)  sensor data
+            pos:         (B, T, N, 3)      fingertip 3D pose (wrist-local)
+            wrist_poses: (B, T, 2, 9)      wrist poses [translation(3)+rot6d(6)].
+                         When provided, the two wrists are concatenated (18D),
+                         embedded via wrist_embed, and used as the register token
+                         instead of the learned register_tokens parameter.
+            sensor_ids:  (B,) long         sensor type per sample
+            masks:       sensor stream masking (x 전용)
+            mask_type:   "block" or "tubelet"
             masktoken_masks: mask token 위치
-            pos_masks:  position stream masking (pos 전용, None이면 masks와 동일)
+            pos_masks:   position stream masking (pos 전용, None이면 masks와 동일)
 
         Returns:
             dict with keys:
@@ -429,18 +560,50 @@ class MultiSensorTransformer(SignalTransformer):
               x_prenorm          : (B_eff, num_patches, D)
               x_tokens           : (B_eff, reg+patches, D)
         """
+        # --- Null token expansion: (B,T,10,C) → (B,T,42,C) + mask ----------
+        # print(wrist_poses, self.pos_mean)
+        if self.use_null_token:
+            x, null_masktoken_mask = self.expand_to_skeleton(x)
+            # Combine with any external masktoken_masks (SSL iBOT masks)
+            if masktoken_masks is None:
+                masktoken_masks = null_masktoken_mask
+            else:
+                # OR: positions that are either null OR iBOT-masked get mask_token
+                masktoken_masks = masktoken_masks | null_masktoken_mask
+            # print('###', x.shape, pos.shape, masktoken_masks.shape)
+
         # --- Embedding: (B, T, N, C) → (B, num_chunks, N, D) ---------------
         x   = self.pre_embed(x,   sensor_ids=sensor_ids)
         pos = self.pre_pos_embed(pos)
+        # print('###', x.shape, pos.shape)
+
+        # --- Wrist register token: concat(left_9d, right_9d) → embed → (B, 1, D) ---
+        if wrist_poses is not None:
+            B_orig = x.shape[0]
+            # (B, T, 2, 9) → (B, T, 18) → Linear → mean over T → (B, 1, D)
+            wrist_token = self.wrist_embed(
+                wrist_poses.reshape(B_orig, wrist_poses.shape[1], 18)
+            ).mean(dim=1, keepdim=True)   # (B, 1, D)
+        else:
+            wrist_token = None
 
         # --- prepare_tokens_with_mask: flatten + reg token + pos_embed ------
-        #   x:   (B_eff, reg + n_keep_x, D)  — register token 포함
-        #   pos: (B_eff, n_keep_p, D)         — register token 없음
+        #   x:   (B_eff, n_keep_x, D)   — no register token (skip_register=True)
+        #   pos: (B_eff, reg+n_keep_p, D) — register token prepended (or wrist token)
         _pos_masks = pos_masks if pos_masks is not None else masks
         x,   bias     = self.prepare_tokens_with_mask(x,   masks,     mask_type, masktoken_masks, skip_register=True)
-        pos, pos_bias = self.prepare_tokens_with_mask(pos, _pos_masks, mask_type, None,           skip_register=False)
+        if wrist_token is not None:
+            pos, pos_bias = self.prepare_tokens_with_mask(pos, _pos_masks, mask_type, None, skip_register=True)
+            # Expand wrist_token to match batch expansion from masks
+            B_eff = pos.shape[0]
+            if B_eff != wrist_token.shape[0]:
+                repeat = B_eff // wrist_token.shape[0]
+                wrist_token = wrist_token.repeat_interleave(repeat, dim=0)
+            pos = torch.cat([wrist_token, pos], dim=1)
+        else:
+            pos, pos_bias = self.prepare_tokens_with_mask(pos, _pos_masks, mask_type, None, skip_register=False)
 
-        # masks로 배치가 확장된 경우 sensor_ids도 같이 확장
+        # masks로 배치가 확장된 경우 sensor_ids도 같이 확
         if sensor_ids is not None and masks is not None:
             sensor_ids_eff = sensor_ids.unsqueeze(0).expand(masks.shape[0], -1).flatten()
         else:
@@ -470,11 +633,26 @@ class MultiSensorTransformer(SignalTransformer):
 
     # ── stats update ─────────────────────────────────────────────────────────
 
-    def update_stats(self, signal_mean: torch.Tensor, signal_std: torch.Tensor):
-        """signal_mean/std: (NUM_SENSORS, in_chans)."""
+    def update_stats(
+        self,
+        signal_mean: torch.Tensor,
+        signal_std: torch.Tensor,
+        pos_mean: Optional[torch.Tensor] = None,
+        pos_std: Optional[torch.Tensor] = None,
+    ):
+        """Update normalization buffers.
+
+        Args:
+            signal_mean/std: (NUM_SENSORS, in_chans)
+            pos_mean/std:    (3,) — optional pose normalization stats
+        """
         assert signal_mean.shape == signal_std.shape == (NUM_SENSORS, self.in_chans)
         self.signal_mean = signal_mean
         self.signal_std  = signal_std
+        if pos_mean is not None and pos_std is not None:
+            assert pos_mean.shape == pos_std.shape == (3,)
+            self.pos_mean = pos_mean
+            self.pos_std  = pos_std
 
 
 # ── factory functions ─────────────────────────────────────────────────────────

@@ -88,6 +88,35 @@ def init_wandb(cfg: DictConfig):
     return wandb
 
 
+def _maybe_update_encoder_stats(algorithm, sensor_means, sensor_stds, pos_mean=None, pos_std=None):
+    """Call update_stats() on any available backbone/encoder modules."""
+    modules = []
+    if hasattr(algorithm, "student_encoder_dict") and "backbone" in algorithm.student_encoder_dict:
+        modules.append(("student_backbone", algorithm.student_encoder_dict["backbone"]))
+    if hasattr(algorithm, "teacher_encoder_dict") and "backbone" in algorithm.teacher_encoder_dict:
+        modules.append(("teacher_backbone", algorithm.teacher_encoder_dict["backbone"]))
+    if hasattr(algorithm, "encoder"):
+        modules.append(("encoder", algorithm.encoder))
+
+    seen = set()
+    for name, module in modules:
+        if id(module) in seen or not hasattr(module, "update_stats"):
+            continue
+        seen.add(id(module))
+
+        kwargs = {}
+        if sensor_means is not None and sensor_stds is not None:
+            kwargs["signal_mean"] = torch.tensor(sensor_means, dtype=torch.float32)
+            kwargs["signal_std"] = torch.tensor(sensor_stds, dtype=torch.float32)
+        if pos_mean is not None and pos_std is not None:
+            kwargs["pos_mean"] = torch.tensor(pos_mean, dtype=torch.float32)
+            kwargs["pos_std"] = torch.tensor(pos_std, dtype=torch.float32)
+
+        if kwargs:
+            module.update_stats(**kwargs)
+            logger.info(f"Called update_stats() on {name}")
+
+
 def get_dataloaders_magnetic_based(cfg: DictConfig):
     data_cfg = cfg.data
 
@@ -609,7 +638,6 @@ def get_dataloaders_cross_sensor_based(cfg: DictConfig, is_eval=False):
 
 def get_dataloaders_gigahands_based(cfg: DictConfig):
     """Load GigaHands, OakInkV2, or combined dataset for DINOv2 SSL pretraining."""
-    from tactile_ssl.data.gigahands_tactile import GigaHandsTactileDataset
     from tactile_ssl.data.oakinkv2_tactile import OakInkV2TactileDataset
 
     data_cfg = cfg.data
@@ -682,6 +710,23 @@ def get_dataloaders_gigahands_based(cfg: DictConfig):
     train_dset.sensor_std  = [std_val]
     val_dset.sensor_mean   = [mean_val]
     val_dset.sensor_std    = [std_val]
+
+    # ── Compute pose normalization stats for OakInkV2 wrist-local poses ─────
+    if sensor == "oakinkv2":
+        logger.info("Computing OakInkV2 pose normalization stats…")
+        all_pos = [seq.joint_data[..., :3].reshape(-1, 3) for seq in train_ds._sequences]
+        if all_pos:
+            pos_arr = np.concatenate(all_pos, axis=0)
+            pos_mean = np.mean(pos_arr, axis=0).tolist()
+            pos_std = [float(s) if s > 1e-6 else 1.0 for s in np.std(pos_arr, axis=0)]
+        else:
+            pos_mean = [0.0, 0.0, 0.0]
+            pos_std = [1.0, 1.0, 1.0]
+        logger.info(f"  pose     mean={pos_mean}  std={pos_std}")
+        train_dset.pos_mean = pos_mean
+        train_dset.pos_std = pos_std
+        val_dset.pos_mean = pos_mean
+        val_dset.pos_std = pos_std
 
     logger.info(
         f"{sensor}: {len(train_dset)} train windows, "
@@ -793,6 +838,27 @@ def get_dataloaders_brainco_based(cfg: DictConfig):
     if val_dset:
         val_dset.sensor_mean = mean
         val_dset.sensor_std = std
+
+    # Compute pose normalization stats from fingertip_rel (N, 10, 3)
+    all_pos = []
+    src_datasets = train_dset.datasets if hasattr(train_dset, "datasets") else [train_dset]
+    for ds in src_datasets:
+        inner = ds.dataset if hasattr(ds, "dataset") else ds
+        if hasattr(inner, "fingertip_rel"):
+            all_pos.append(inner.fingertip_rel.reshape(-1, 3).astype(np.float32))
+    if all_pos:
+        pos_arr = np.concatenate(all_pos, axis=0)
+        pos_mean = np.mean(pos_arr, axis=0).tolist()
+        pos_std  = [float(s) if s > 1e-6 else 1.0 for s in np.std(pos_arr, axis=0)]
+    else:
+        pos_mean = [0.0, 0.0, 0.0]
+        pos_std  = [1.0, 1.0, 1.0]
+    logger.info(f"BrainCo pose mean: {pos_mean}  std: {pos_std}")
+    train_dset.pos_mean = pos_mean
+    train_dset.pos_std  = pos_std
+    if val_dset:
+        val_dset.pos_mean = pos_mean
+        val_dset.pos_std  = pos_std
 
     return train_dset, val_dset
 
@@ -955,6 +1021,28 @@ def get_dataloaders_brainco_xela_based(cfg: DictConfig):
         val_dset.sensor_mean = per_sensor_mean
         val_dset.sensor_std  = per_sensor_std
 
+    # ── Compute pose normalization stats (3D xyz, wrist-relative) ────────────
+    all_pos = []
+    for ds in brainco_train_raw:
+        if hasattr(ds, "fingertip_rel"):
+            all_pos.append(ds.fingertip_rel.reshape(-1, 3).astype(np.float32))
+    for ds in xela_train_raw:
+        if hasattr(ds, "grouped_poses"):
+            all_pos.append(ds.grouped_poses[..., :3].reshape(-1, 3).astype(np.float32))
+    if all_pos:
+        pos_arr  = np.concatenate(all_pos, axis=0)
+        pos_mean = np.mean(pos_arr, axis=0).tolist()
+        pos_std  = [float(s) if s > 1e-6 else 1.0 for s in np.std(pos_arr, axis=0)]
+    else:
+        pos_mean = [0.0, 0.0, 0.0]
+        pos_std  = [1.0, 1.0, 1.0]
+    logger.info(f"Pose norm  mean: {pos_mean}  std: {pos_std}")
+    train_dset.pos_mean = pos_mean
+    train_dset.pos_std  = pos_std
+    if val_dset is not None:
+        val_dset.pos_mean = pos_mean
+        val_dset.pos_std  = pos_std
+
     # ── 50:50 WeightedRandomSampler ──────────────────────────────────────────
     brainco_total = sum(len(ds) for ds in brainco_train_raw)
     xela_total    = sum(len(ds) for ds in xela_train_raw)
@@ -1075,11 +1163,18 @@ def train(cfg: DictConfig):
             # Also inject into encoder config so it's passed during instantiation
             cfg.algorithm.encoder.normalization = {"mean": sensor_means, "std": sensor_stds}
 
+    # Inject pose normalization stats if available
+    train_dset = train_dataloader.dataset
+    pos_mean = getattr(train_dset, "pos_mean", None)
+    pos_std  = getattr(train_dset, "pos_std",  None)
+    if pos_mean is not None and pos_std is not None:
+        with open_dict(cfg):
+            cfg.algorithm.encoder.pos_normalization = {"mean": pos_mean, "std": pos_std}
+
     trainer = Trainer(wandb_logger=wandb, **cfg.trainer)
 
     logger.info(f"Instantiating algorithm <{cfg.algorithm._target_}>")
     algorithm = hydra.utils.instantiate(cfg.algorithm)
-
 
     trainer.fit(algorithm, train_dataloader, val_dataloader, ckpt_path=cfg.ckpt_path)
 

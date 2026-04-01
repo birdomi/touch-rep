@@ -107,6 +107,10 @@ class BraincoGraspDetectionSLModule(SLModule):
         checkpoint_task: Optional[str] = None,
         train_encoder: bool = False,
         encoder_type: str = "dino",
+        lora_rank: int = 0,
+        lora_alpha: float = 1.0,
+        lora_dropout: float = 0.0,
+        lora_target_modules: tuple = ("qkv", "proj"),
     ):
         super().__init__(
             model_encoder=model_encoder,
@@ -117,12 +121,20 @@ class BraincoGraspDetectionSLModule(SLModule):
             checkpoint_task=checkpoint_task,
             train_encoder=train_encoder,
             encoder_type=encoder_type,
+            lora_rank=lora_rank,
+            lora_alpha=lora_alpha,
+            lora_dropout=lora_dropout,
+            lora_target_modules=lora_target_modules,
         )
         self.loss_fn = nn.CrossEntropyLoss()
         self.val_preds = []
         self.val_labels = []
         self.val_failed_samples = []   # list of {sensor, label, pred}
         self.last_val_metrics = {}
+        self.best_val_metrics = {}
+        self._best_state_dict = None   # saved when val accuracy peaks
+        self._in_test = False          # flag: running test eval loop
+        self.last_test_metrics = {}
         
         embed_dim = self.model_encoder.embed_dim
         num_heads = getattr(self.model_encoder, "num_heads", 12)
@@ -150,7 +162,7 @@ class BraincoGraspDetectionSLModule(SLModule):
         B, W, N, C = sensor.shape
         # Reshape to process all windows at once: (B * num_windows, num_sensors, C)
         sensor_input = sensor.view(B * W, 1, N, C)
-        poses_input = sensor_poses.view(B * W, 1, N, 6)
+        poses_input = sensor_poses.view(B * W, 1, N, 3)
 
         # Run encoder
         with torch.no_grad() if not self.train_encoder else torch.enable_grad():
@@ -201,6 +213,9 @@ class BraincoGraspDetectionSLModule(SLModule):
         }
 
     def validation_step(self, batch: Dict[str, Any], batch_idx: int) -> Dict:
+        # print(batch['sensor_poses'].shape)
+        # print(batch['sensor'].shape)
+
         val_result = self.training_step(batch, batch_idx)
         # print(val_result)
         return val_result
@@ -253,7 +268,25 @@ class BraincoGraspDetectionSLModule(SLModule):
 
         # Confusion matrix
         cm = confusion_matrix(labels, preds, labels=[0, 1])
-        
+
+        # ── test-mode: just record metrics and return ──────────────────────────
+        if self._in_test:
+            log.info("="*40)
+            log.info(f"Test Results (best val weights):")
+            log.info(f"Accuracy: {accuracy:.4f}")
+            log.info(f"F1 Score: {f1:.4f}")
+            log.info(f"Confusion Matrix:\n{cm}")
+            log.info("="*40)
+            self.last_test_metrics = {"accuracy": float(accuracy), "f1": float(f1)}
+            if trainer_instance is not None:
+                trainer_instance.wandb.log({
+                    "test/overall_accuracy": accuracy,
+                    "test/f1_score": f1,
+                })
+            self.val_preds = []
+            self.val_labels = []
+            return
+
         log.info("="*40)
         log.info(f"Validation Results:")
         log.info(f"Accuracy: {accuracy:.4f}")
@@ -276,6 +309,13 @@ class BraincoGraspDetectionSLModule(SLModule):
         im = Image.open(img_buf)
 
         self.last_val_metrics = {"accuracy": accuracy, "f1": f1}
+        if accuracy > self.best_val_metrics.get("accuracy", -1.0):
+            self.best_val_metrics = {"accuracy": float(accuracy), "f1": float(f1)}
+            import copy
+            self._best_state_dict = copy.deepcopy(
+                {k: v.cpu() for k, v in self.state_dict().items()}
+            )
+            log.info(f"New best val accuracy: {accuracy:.4f} — weights saved.")
 
         if trainer_instance is not None:
             trainer_instance.wandb.log({
@@ -308,6 +348,19 @@ class BraincoGraspDetectionSLModule(SLModule):
         self.val_preds = []
         self.val_labels = []
         self.val_failed_samples = []
+
+    def evaluate_test(self, test_loader, trainer_instance):
+        """Restore best-val weights and evaluate on test_loader. Returns {accuracy, f1}."""
+        if self._best_state_dict is not None:
+            self.load_state_dict(self._best_state_dict)
+            log.info("Restored best-val weights for test evaluation.")
+        else:
+            log.warning("No best_state_dict saved — using final weights for test.")
+
+        self._in_test = True
+        trainer_instance.val_loop(self, test_loader)
+        self._in_test = False
+        return self.last_test_metrics
 
     def _load_rgb_frame(self, episode_path: str, frame_idx: int):
         """Load a single RGB frame from {episode_path}/colors/. Returns HxWx3 uint8 or None."""

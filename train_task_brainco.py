@@ -66,6 +66,9 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
     fold = int(cfg.get("fold", 0))
     num_folds = int(cfg.get("num_folds", 5))
 
+    # 3-1-1 split:  val=fold k,  test=fold (k+1)%num_folds,  train=remaining
+    test_fold = (fold + 1) % num_folds
+
     # Instantiate the full dataset (all episodes)
     dataset = hydra.utils.instantiate(data_cfg.dataset)
 
@@ -78,24 +81,24 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
     num_episodes = len(sorted_episodes)
 
     # Contiguous block split: divide sorted episodes into num_folds equal blocks.
-    # fold k uses block k as val, the rest as train.
-    fold_size = num_episodes // num_folds
-    val_start = fold * fold_size
-    val_end   = val_start + fold_size if fold < num_folds - 1 else num_episodes
-    val_ep_set = set(range(val_start, val_end))
+    def _fold_range(k):
+        fold_size = num_episodes // num_folds
+        start = k * fold_size
+        end = start + fold_size if k < num_folds - 1 else num_episodes
+        return set(range(start, end))
+
+    val_ep_set  = _fold_range(fold)
+    test_ep_set = _fold_range(test_fold)
 
     # Build window index lists using sorted episode order
-    # We need to map sorted episodes back to indices in dataset.windows.
-    # dataset.windows is built in the same order as dataset.episode_data,
-    # so we first build a path→start_idx map.
     ep_window_start = {}
     current_idx = 0
     for ep_data in dataset.episode_data:
         ep_window_start[ep_data["path"]] = current_idx
         current_idx += len(ep_data["window_starts"])
 
-    train_indices, val_indices = [], []
-    train_ep_names, val_ep_names = [], []
+    train_indices, val_indices, test_indices = [], [], []
+    train_ep_names, val_ep_names, test_ep_names = [], [], []
 
     for rank, ep_data in enumerate(sorted_episodes):
         num_windows = len(ep_data["window_starts"])
@@ -105,20 +108,27 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
         if rank in val_ep_set:
             val_indices.extend(window_range)
             val_ep_names.append(ep_name)
+        elif rank in test_ep_set:
+            test_indices.extend(window_range)
+            test_ep_names.append(ep_name)
         else:
             train_indices.extend(window_range)
             train_ep_names.append(ep_name)
 
-    print(f"\n=== Episode K-Fold Split (fold={fold}/{num_folds}, total={num_episodes} episodes) ===")
+    print(f"\n=== Episode 3-1-1 Split (val_fold={fold}, test_fold={test_fold}/{num_folds}, total={num_episodes} episodes) ===")
     print(f"  Train: {len(train_ep_names)} episodes")
     for name in train_ep_names:
         print(f"    [train] {name}")
     print(f"  Val: {len(val_ep_names)} episodes")
     for name in val_ep_names:
         print(f"    [val]   {name}")
+    print(f"  Test: {len(test_ep_names)} episodes")
+    for name in test_ep_names:
+        print(f"    [test]  {name}")
 
     train_dset = data.Subset(dataset, train_indices)
     val_dset   = data.Subset(dataset, val_indices)
+    test_dset  = data.Subset(dataset, test_indices)
 
     # Class distribution
     CLASS_NAMES = {0: "Fail", 1: "Success"}
@@ -135,6 +145,7 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
     print("=== Class Distribution ===")
     _print_dist("Train", _class_dist(train_indices), len(train_indices))
     _print_dist("Val  ", _class_dist(val_indices),   len(val_indices))
+    _print_dist("Test ", _class_dist(test_indices),  len(test_indices))
     print("=" * 26 + "\n")
 
     # Initialize generator for budget splits
@@ -153,14 +164,15 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
         budget_size = int(len(val_dset) * data_cfg.val_data_budget)
         val_dset, _ = data.random_split(val_dset, [budget_size, len(val_dset) - budget_size], generator=g)
 
-    print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val")
+    print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val, {len(test_dset)} test")
 
     train_loader_args = dict(cfg.data.train_dataloader)
     val_loader_args   = dict(cfg.data.val_dataloader)
 
     train_dataloader = data.DataLoader(train_dset, **train_loader_args)
     val_dataloader   = data.DataLoader(val_dset,   **val_loader_args)
-    return train_dataloader, val_dataloader
+    test_dataloader  = data.DataLoader(test_dset,  **val_loader_args)
+    return train_dataloader, val_dataloader, test_dataloader
 
 
 def get_dataloaders(cfg: DictConfig):
@@ -175,10 +187,11 @@ def get_dataloaders(cfg: DictConfig):
     elif data_cfg.sensor == "xela":
         train_dataloader, val_dataloader = get_dataloader_xela(cfg)
     elif data_cfg.sensor in ("brainco_grasp", "brainco_grasp_prediction", "brainco_grasp_multimodal"):
-        train_dataloader, val_dataloader = get_dataloader_brainco_grasp(cfg)
+        train_dataloader, val_dataloader, test_dataloader = get_dataloader_brainco_grasp(cfg)
+        return train_dataloader, val_dataloader, test_dataloader
     else:
         raise NotImplementedError(f"Sensor type '{data_cfg.sensor}' not implemented yet.")
-    return train_dataloader, val_dataloader
+    return train_dataloader, val_dataloader, None
 
 
 def attempt_resume(cfg: DictConfig):
@@ -227,7 +240,7 @@ def train(cfg: DictConfig):
     torch.backends.cudnn.benchmark = True
 
     logger.info(f"Instantiating dataset & dataloaders for <{cfg.data.dataset._target_}>")
-    train_dataloader, val_dataloader = get_dataloaders(cfg)
+    train_dataloader, val_dataloader, test_dataloader = get_dataloaders(cfg)
 
     logger.info(f"Instantiating model <{cfg.task._target_}>")
     model = hydra.utils.instantiate(cfg.task)
@@ -236,9 +249,27 @@ def train(cfg: DictConfig):
 
     trainer.fit(model, train_dataloader, val_dataloader, ckpt_path=cfg.ckpt_path)
 
+    # Evaluate on test set using best-val weights
+    test_metrics = {}
+    if test_dataloader is not None and hasattr(model, "evaluate_test"):
+        logger.info("Evaluating on test set with best-val weights ...")
+        test_dataloader = trainer.fabric.setup_dataloaders(
+            test_dataloader, use_distributed_sampler=trainer.use_distributed_sampler
+        )
+        test_metrics = model.evaluate_test(test_dataloader, trainer)
+        logger.info(f"Test metrics: {test_metrics}")
+        wandb.log({
+            "test/overall_accuracy": test_metrics.get("accuracy", float("nan")),
+            "test/f1_score": test_metrics.get("f1", float("nan")),
+        })
+
     wandb.finish()
 
-    return getattr(model, "last_val_metrics", {})
+    return {
+        "last": getattr(model, "last_val_metrics", {}),
+        "best": getattr(model, "best_val_metrics", {}),
+        "test": test_metrics,
+    }
 
 
 # @hydra.main(version_base="1.3", config_path="config")
@@ -270,23 +301,43 @@ def main(cfg: DictConfig):
             cfg.wandb.id = base_wandb_id
 
         # Print summary
+        for tag, label in [("last", "Last Epoch"), ("best", "Best Epoch")]:
+            print(f"\n{'='*60}")
+            print(f"  K-FOLD CROSS-VALIDATION SUMMARY ({label})")
+            print(f"{'='*60}")
+            print(f"{'Fold':>6}  {'Accuracy':>10}  {'F1 Score':>10}")
+            print(f"{'-'*34}")
+            accuracies, f1s = [], []
+            for fold in range(num_folds):
+                m = all_metrics.get(fold, {}).get(tag, {})
+                acc = m.get("accuracy", float("nan"))
+                f1  = m.get("f1",       float("nan"))
+                accuracies.append(acc)
+                f1s.append(f1)
+                print(f"{fold:>6}  {acc:>10.4f}  {f1:>10.4f}")
+            print(f"{'-'*34}")
+            print(f"{'Mean':>6}  {np.mean(accuracies):>10.4f}  {np.mean(f1s):>10.4f}")
+            print(f"{'Std':>6}  {np.std(accuracies):>10.4f}  {np.std(f1s):>10.4f}")
+            print(f"{'='*60}")
+
+        # Test results (evaluated with best-val weights per fold)
         print(f"\n{'='*60}")
-        print("  K-FOLD CROSS-VALIDATION SUMMARY (Last Epoch)")
+        print(f"  K-FOLD TEST RESULTS (best-val weights)")
         print(f"{'='*60}")
         print(f"{'Fold':>6}  {'Accuracy':>10}  {'F1 Score':>10}")
         print(f"{'-'*34}")
-        accuracies, f1s = [], []
+        test_accs, test_f1s = [], []
         for fold in range(num_folds):
-            m = all_metrics.get(fold, {})
+            m = all_metrics.get(fold, {}).get("test", {})
             acc = m.get("accuracy", float("nan"))
-            f1 = m.get("f1", float("nan"))
-            accuracies.append(acc)
-            f1s.append(f1)
+            f1  = m.get("f1",       float("nan"))
+            test_accs.append(acc)
+            test_f1s.append(f1)
             print(f"{fold:>6}  {acc:>10.4f}  {f1:>10.4f}")
         print(f"{'-'*34}")
-        print(f"{'Mean':>6}  {np.mean(accuracies):>10.4f}  {np.mean(f1s):>10.4f}")
-        print(f"{'Std':>6}  {np.std(accuracies):>10.4f}  {np.std(f1s):>10.4f}")
-        print(f"{'='*60}\n")
+        print(f"{'Mean':>6}  {np.mean(test_accs):>10.4f}  {np.mean(test_f1s):>10.4f}")
+        print(f"{'Std':>6}  {np.std(test_accs):>10.4f}  {np.std(test_f1s):>10.4f}")
+        print(f"{'='*60}")
     else:
         train(cfg)
 
