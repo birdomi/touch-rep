@@ -20,7 +20,7 @@ normalization:
 
 sensor: oakinkv2
 
-data_root: pretraining_dataset/OakInkv2
+data_root: pretraining_dataset/OakInkv2_tmp
 window_size: 3
-window_stride: 1
+window_stride: 3
 train_val_split: 1.0

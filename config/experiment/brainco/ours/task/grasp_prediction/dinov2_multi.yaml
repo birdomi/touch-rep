@@ -20,7 +20,7 @@ data:
   dataset:
     _target_: tactile_ssl.data.brainco_grasp_dataset.BraincoGraspDetectionDatasetV2
 task:
-  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_multi_sensor_pretrained/epoch-0020.ckpt
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_multi_sensor_pretrained/epoch-0100.ckpt
   train_encoder: true
   lora_rank: 0      # LoRA 활성화
   lora_alpha: 16.0  

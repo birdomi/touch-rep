@@ -65,12 +65,12 @@ task:
   optim_cfg:
     _partial_: True
     _target_: torch.optim.AdamW
-    lr: 3e-4
-    weight_decay: 1e-4
+    lr: 1e-4
+    weight_decay: 1e-2
 
   scheduler_cfg:
     _partial_: True
     _target_: tactile_ssl.model.custom_scheduler.WarmupCosineScheduler
-    warmup_epochs: 5
-    start_lr: 1e-5
+    warmup_epochs: 0
+    start_lr: 1e-4
     final_lr: 1e-6

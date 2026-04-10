@@ -91,6 +91,12 @@ class BraincoGraspDetectionDataset(BraincoSSLDataset):
                     log.warning(f"  Skipping {ep_path}: {exc}")
                     continue
 
+                if ep_ds.num_frames < ep_ds.num_frames_per_window:
+                    log.warning(
+                        f"  Skipping {ep_path}: {ep_ds.num_frames} frames < window size {ep_ds.num_frames_per_window}"
+                    )
+                    continue
+
                 # ── episode_data entry ──────────────────────────────────
                 self.episode_data.append({
                     "path":          str(ep_path),

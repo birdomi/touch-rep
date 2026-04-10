@@ -11,7 +11,7 @@ Architecture
 Temporal compression (PatchEmbed1d)
 ------------------------------------
   sensor : (B, T, N, C)  → Conv1d(C→D, kernel=chunk) → (B, T//chunk, N, D)
-  pos    : (B, T, N, 6)  → Conv1d(6→D, kernel=chunk) → (B, T//chunk, N, D)
+  pos    : (B, T, N, 3)  → Conv1d(3→D, kernel=chunk) → (B, T//chunk, N, D)
 
   총 토큰 = num_register_tokens + num_chunks × N
   e.g. T=50, chunk=5, N=10 → 1 + 10×10 = 101 tokens
@@ -40,6 +40,7 @@ from tactile_ssl.utils.logging import get_pylogger
 from tactile_ssl.model import SignalTransformer
 from .layers import MemEffAttention, Mlp, PatchEmbed1d
 from .layers import NestedTensorBlock as Block
+from .layers import init_weights_vit_timm
 
 log = get_pylogger(__name__)
 
@@ -187,15 +188,10 @@ class MultiSensorTransformer(SignalTransformer):
         D     = embed_dim
         num_chunks = seq // chunk
 
-        if self.use_null_token:
-            log.info("using null token, changing pos_embed size to FULL_SKELETON_SIZE")
-            self.pos_embed = nn.Parameter(
-                torch.zeros(
-                    1,
-                    (self.sequence_length // self.time_chunk_size) * FULL_SKELETON_SIZE,
-                    self.embed_dim,
-                )
-            )
+        # ── Positional Embedding ───────────────────────────────────
+        self.pos_embed = nn.Parameter(torch.zeros(2, 21, D)) # 21 joints embedding for each trasnformer (sensor + fuse)
+        self.hand_embed = nn.Parameter(torch.zeros(2, 2, D)) # left or right hand embedding for each trasnformer (pose + fuse)
+
 
         # ── PatchEmbed1d: sensor stream ───────────────────────────────────
         # BrainCo: Conv1d(4 → D, kernel=chunk, stride=chunk)
@@ -205,8 +201,8 @@ class MultiSensorTransformer(SignalTransformer):
             _make_embed1d(self.xela_in_chans, seq, chunk, D),  # sensor_id = 1 (XELA)
         ])
 
-        # ── PatchEmbed1d: position stream (fingertip 6D pose) ─────────────
-        # Conv1d(6 → D, kernel=chunk, stride=chunk)
+        # ── PatchEmbed1d: position stream (fingertip 3D pose) ─────────────
+        # Conv1d(3 → D, kernel=chunk, stride=chunk)
         self.position_embed = _make_embed1d(3, seq, chunk, D)
 
         # ── Wrist register token embedding: concat(left_9d, right_9d) → D ──
@@ -259,16 +255,29 @@ class MultiSensorTransformer(SignalTransformer):
         else:
             pm = torch.zeros(3)
             ps = torch.ones(3)
+
         self.register_buffer("pos_mean", pm)   # (3,)
         self.register_buffer("pos_std",  ps)   # (3,)
 
         self.init_weights()
+        # Other parameters (pos_embed, hand_embed)
+        nn.init.trunc_normal_(self.hand_embed, std=0.02)
+        
 
         log.info(
             f"MultiSensorTransformer: T={seq}, chunk={chunk}, num_chunks={num_chunks}, "
             f"N={in_dim}, pre_fusion_depth={self.pre_fusion_depth}, "
             f"total_tokens={1 + num_chunks * in_dim}, embed_dim={D}"
         )
+
+    # def init_weights(self):
+    #     if self.pos_embed_fn == "learned":
+    #         nn.init.trunc_normal_(self.pos_embed, std=0.02)
+    #         nn.init.trunc_normal_(self.hand_embed, std=0.02)
+    #     if self.mask_token is not None:
+    #         nn.init.trunc_normal_(self.mask_token, std=0.02)
+    #     self.apply(init_weights_vit_timm)
+
 
     # ── normalization ─────────────────────────────────────────────────────────
 
@@ -342,7 +351,7 @@ class MultiSensorTransformer(SignalTransformer):
 
     # ── sensor embedding ──────────────────────────────────────────────────────
 
-    def pre_embed(
+    def pre_sensor_embed(
         self,
         x: torch.Tensor,
         sensor_ids: Optional[torch.Tensor] = None,
@@ -351,7 +360,7 @@ class MultiSensorTransformer(SignalTransformer):
 
         Args:
             x:          (B, T, N, C_max)
-            sensor_ids: (B,) long,  None이면 BrainCo fallback
+            sensor_ids: (B,) long,  None이면 BrainCo fallback, 0 for hand, 1 for brainco, 2 for xela
 
         Returns:
             (B, num_chunks, N, embed_dim)
@@ -402,6 +411,7 @@ class MultiSensorTransformer(SignalTransformer):
         B, _, N, _ = pos.shape
         pos_xyz = pos[..., :3].clone()
         pos_xyz = (pos_xyz - self.pos_mean) / self.pos_std
+
         return _apply_embed1d(pos_xyz, self.position_embed, B, N)
 
     # ── per-sensor pre-fusion blocks ──────────────────────────────────────────
@@ -487,22 +497,25 @@ class MultiSensorTransformer(SignalTransformer):
             f"Input sequence length {t} is greater than model sequence length {self.sequence_length}"
         )
 
-        if self.pos_embed_fn == "sinusoidal":
-            pos_embed = self.pos_embed(x.device).float().unsqueeze(0)
-        elif self.pos_embed_fn == "learned":
-            pos_embed = self.pos_embed.float()
-            if n != pos_embed.shape[1]:
-                # pos_embed이 42-sized(use_null_token=True)이지만 입력이 10 tactile 센서일 때만 필터링
-                # use_null_token=False → pos_embed이 in_dim-sized → TACTILE_SENSOR_IDXS(max=41) OOB
-                pos_embed = pos_embed[:, TACTILE_SENSOR_IDXS, :]
+        pos_embed = self.pos_embed[0,].float()
+        hand_embed = self.hand_embed[0,].float()
+        pos_embed = torch.cat([pos_embed + hand_embed[0], pos_embed + hand_embed[1]], dim=0)  # (2, 42, D) → (4, 42, D) for sensor and fusion blocks
 
-        else:
-            raise NotImplementedError("Unknown position embeding function")
+        # if n != pos_embed.shape[1]:
+        #     # pos_embed이 42-sized(use_null_token=True)이지만 입력이 10 tactile 센서일 때만 필터링
+        #     # use_null_token=False → pos_embed이 in_dim-sized → TACTILE_SENSOR_IDXS(max=41) OOB
+        #     pos_embed = pos_embed[:, TACTILE_SENSOR_IDXS, :]
+
+
+        # else:
+        #     raise NotImplementedError("Unknown position embeding function")
+        # print(x.shape, pos_embed.shape, hand_embed.shape, t)
+
+
         
-        # print(x.shape, pos_embed.shape)
 
-        pos_embed = einops.rearrange(pos_embed, "1 (t n) c -> 1 t n c", n=n)
-        x = x + pos_embed[:, :t]
+        pos_embed = pos_embed.view(1, 1, 42, -1)
+        x = x + pos_embed
 
         if masks is not None:
             if mask_type == "tubelet":
@@ -573,12 +586,12 @@ class MultiSensorTransformer(SignalTransformer):
             # print('###', x.shape, pos.shape, masktoken_masks.shape)
 
         # --- Embedding: (B, T, N, C) → (B, num_chunks, N, D) ---------------
-        x   = self.pre_embed(x,   sensor_ids=sensor_ids)
+        x   = self.pre_sensor_embed(x,   sensor_ids=sensor_ids)
         pos = self.pre_pos_embed(pos)
-        # print('###', x.shape, pos.shape)
 
         # --- Wrist register token: concat(left_9d, right_9d) → embed → (B, 1, D) ---
         if wrist_poses is not None:
+            # print(wrist_poses)
             B_orig = x.shape[0]
             # (B, T, 2, 9) → (B, T, 18) → Linear → mean over T → (B, 1, D)
             wrist_token = self.wrist_embed(

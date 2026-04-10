@@ -32,7 +32,7 @@ optim_cfg:
   _partial_: True
   _target_: torch.optim.AdamW
   lr: 1e-4
-  weight_decay: 0.05
+  weight_decay: 0.0005
 
 lr_scheduler_cfg:
   _partial_: True

@@ -8,16 +8,14 @@ sparsh-skin-dataset/*
 dataset/*
 assets/*
 experiments/*
-<<<<<<< HEAD
-pretraining_dataset/*
-=======
 0313/*
 pretraining_dataset/*
 
->>>>>>> 7dd3d52364a2f489def0abdef6457e6e935ebc2b
 # C extensions
 *.so
 *.zip
+
+*.png
 
 # Distribution / packaging
 .Python

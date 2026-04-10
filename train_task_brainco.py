@@ -25,7 +25,6 @@ from tactile_ssl.trainer import Trainer
 from tactile_ssl.utils.combined_dataset import CombinedDataset
 
 logger = get_pylogger(__name__)
-
 OmegaConf.register_new_resolver("int_multiply", lambda a, b: int(a * b))
 OmegaConf.register_new_resolver("int_divide", lambda a, b: a // b)
 OmegaConf.register_new_resolver("d360_expt_name", get_experiment_name)
@@ -125,6 +124,39 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
     print(f"  Test: {len(test_ep_names)} episodes")
     for name in test_ep_names:
         print(f"    [test]  {name}")
+
+    # ── Compute normalization stats from train windows ────────────────────
+    print("Computing normalization stats from training data ...")
+    all_sensor = torch.stack([dataset.windows[i]["sensor"] for i in train_indices])      # (N, W, 10, 4)
+    all_poses  = torch.stack([dataset.windows[i]["sensor_poses"] for i in train_indices])  # (N, W, 10, 3)
+
+    NUM_SENSOR_TYPES = 2  # MultiSensorTransformer expects (NUM_SENSORS, in_chans)
+    NUM_CHANS = all_sensor.shape[-1]
+    sensor_mean_1d = torch.zeros(NUM_CHANS)
+    sensor_std_1d  = torch.ones(NUM_CHANS)
+    for c in range(NUM_CHANS):
+        valid = all_sensor[..., c][all_sensor[..., c] >= 0].float()
+        if valid.numel() > 0:
+            sensor_mean_1d[c] = valid.mean()
+            sensor_std_1d[c]  = valid.std().clamp(min=1e-6)
+
+    signal_mean = sensor_mean_1d.unsqueeze(0).expand(NUM_SENSOR_TYPES, -1).clone()
+    signal_std  = sensor_std_1d.unsqueeze(0).expand(NUM_SENSOR_TYPES, -1).clone()
+
+    pose_flat = all_poses.reshape(-1, 3).float()
+    pos_mean  = pose_flat.mean(dim=0)
+    pos_std   = pose_flat.std(dim=0).clamp(min=1e-6)
+
+    print(f"[NormStats] signal_mean (per ch): {sensor_mean_1d.tolist()}")
+    print(f"[NormStats] signal_std  (per ch): {sensor_std_1d.tolist()}")
+    print(f"[NormStats] pos_mean:             {pos_mean.tolist()}")
+    print(f"[NormStats] pos_std:              {pos_std.tolist()}")
+
+    dataset.computed_signal_mean = signal_mean
+    dataset.computed_signal_std  = signal_std
+    dataset.computed_pos_mean    = pos_mean
+    dataset.computed_pos_std     = pos_std
+    # ─────────────────────────────────────────────────────────────────────
 
     train_dset = data.Subset(dataset, train_indices)
     val_dset   = data.Subset(dataset, val_indices)
@@ -244,6 +276,19 @@ def train(cfg: DictConfig):
 
     logger.info(f"Instantiating model <{cfg.task._target_}>")
     model = hydra.utils.instantiate(cfg.task)
+
+    # Pass normalization stats to encoder if computed
+    _ds = train_dataloader.dataset
+    while hasattr(_ds, 'dataset'):
+        _ds = _ds.dataset
+    if hasattr(_ds, 'computed_signal_mean') and hasattr(model, 'model_encoder') and hasattr(model.model_encoder, 'update_stats'):
+        model.model_encoder.update_stats(
+            _ds.computed_signal_mean,
+            _ds.computed_signal_std,
+            _ds.computed_pos_mean,
+            _ds.computed_pos_std,
+        )
+        logger.info("Encoder normalization stats updated from training data.")
 
     trainer = Trainer(wandb_logger=wandb, **cfg.trainer)
 
