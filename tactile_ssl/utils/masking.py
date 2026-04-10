@@ -360,6 +360,38 @@ def block_masking(
     return (id_keep, mask, id_restore)
 
 
+def sample_random_mask(
+    num_tokens: int,
+    num_keep: int,
+    min_mask_size: int,
+    acceptable_regions: Optional[List[torch.Tensor]] = None,
+    generator: Optional[torch.Generator] = None,
+):
+    """Randomly select num_keep tokens from num_tokens without contiguous constraint."""
+    num_keep = max(num_keep, min_mask_size)
+    num_keep = min(num_keep, num_tokens)
+
+    if acceptable_regions is not None:
+        combined = acceptable_regions[0].flatten().clone()
+        for region in acceptable_regions[1:]:
+            combined = combined * region.flatten()
+        acceptable_indices = torch.nonzero(combined).squeeze(-1)
+        if len(acceptable_indices) >= min_mask_size:
+            num_keep = min(num_keep, len(acceptable_indices))
+            perm = torch.randperm(len(acceptable_indices), generator=generator)
+            mask_indices = acceptable_indices[perm[:num_keep]].sort().values
+        else:
+            perm = torch.randperm(num_tokens, generator=generator)
+            mask_indices = perm[:num_keep].sort().values
+    else:
+        perm = torch.randperm(num_tokens, generator=generator)
+        mask_indices = perm[:num_keep].sort().values
+
+    mask_complement = torch.ones(num_tokens, dtype=torch.int32)
+    mask_complement[mask_indices] = 0
+    return mask_indices, mask_complement
+
+
 def sample_block_size_1d(size: int, scale: Tuple[float, float], generator: Optional[torch.Generator] = None):
     _rand = torch.rand(1, generator=generator).item()
     # -- Sample block scale

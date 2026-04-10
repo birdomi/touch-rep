@@ -11,7 +11,7 @@ from xformers.ops import fmha
 from tactile_ssl.algorithm import DINOv2Module
 from tactile_ssl.data.xela.utils import xela_sensor_layout
 from tactile_ssl.utils.logging import get_pylogger
-from tactile_ssl.utils.masking import sample_block_mask, sample_block_size_1d
+from tactile_ssl.utils.masking import sample_block_mask, sample_block_size_1d, sample_random_mask
 
 log = get_pylogger(__name__)
 
@@ -20,13 +20,15 @@ class BraincoDINOv2Module(DINOv2Module):
     def __init__(
         self,
         ibot_mask_ratio: List[float] = [0.1, 0.5],
+        use_random_mask: bool = True,
         *args,
         **kwargs,
-    ): 
+    ):
         super().__init__(*args, **kwargs)
         # TODO: Load this in a different way
         # This is valid only when the baseline is subtracted in the xela dataset
         self.ibot_mask_ratio = ibot_mask_ratio
+        self.use_random_mask = use_random_mask
 
     def on_validation_batch_end(self, outputs: Dict, batch: Dict, batch_idx: int, trainer_instance=None):
         self.log_on_batch_end(outputs, stage="val", trainer_instance=trainer_instance)
@@ -70,11 +72,29 @@ class BraincoDINOv2Module(DINOv2Module):
                     }
                 )
 
+    def _sample_single_mask(self, num_sensors, num_keep, acceptable_regions=None):
+        if self.use_random_mask:
+            return sample_random_mask(
+                num_tokens=num_sensors,
+                num_keep=num_keep,
+                min_mask_size=self.min_keep,
+                acceptable_regions=acceptable_regions,
+                generator=self.generator,
+            )
+        else:
+            return sample_block_mask(
+                [num_sensors],
+                [num_keep],
+                min_mask_size=self.min_keep,
+                acceptable_regions=acceptable_regions,
+                generator=self.generator,
+            )
+
     def sample_masks(self, x):
         batch_size, _, num_sensors, _ = x.shape
 
-        local_maskblock_sizes = sample_block_size_1d(num_sensors, self.local_mask_scale)[0]
-        global_maskblock_sizes = sample_block_size_1d(num_sensors, self.global_mask_scale)[0]
+        local_num_keep = sample_block_size_1d(num_sensors, self.local_mask_scale, self.generator)[0]
+        global_num_keep = sample_block_size_1d(num_sensors, self.global_mask_scale, self.generator)[0]
 
         collated_local_masks, collated_global_masks, collated_ibot_masks = [], [], []
         min_keep_local_patches, min_keep_global_patches = (num_sensors, num_sensors)
@@ -82,12 +102,7 @@ class BraincoDINOv2Module(DINOv2Module):
             masks_encoder, masks_complement = [], []
             ibot_masks = []
             for _ in range(self.num_global_masks):
-                mask, mask_complement = sample_block_mask(
-                    [num_sensors],
-                    [global_maskblock_sizes],
-                    min_mask_size=self.min_keep,
-                    generator=self.generator,
-                )
+                mask, mask_complement = self._sample_single_mask(num_sensors, global_num_keep)
                 ibot_mask = torch.zeros(len(mask), dtype=torch.bool)
                 num_masked_tokens = int(random.uniform(*self.ibot_mask_ratio) * num_sensors)
                 ibot_mask_idx = torch.randperm(len(mask))[:num_masked_tokens]
@@ -105,13 +120,7 @@ class BraincoDINOv2Module(DINOv2Module):
 
             masks_local = []
             for _ in range(self.num_local_masks):
-                mask, _ = sample_block_mask(
-                    [num_sensors],
-                    [local_maskblock_sizes],
-                    min_mask_size=self.min_keep,
-                    acceptable_regions=acceptable_regions,
-                    generator=self.generator,
-                )
+                mask, _ = self._sample_single_mask(num_sensors, local_num_keep, acceptable_regions)
                 masks_local.append(mask)
                 min_keep_local_patches = min(min_keep_local_patches, len(mask))
             collated_local_masks.append(masks_local)

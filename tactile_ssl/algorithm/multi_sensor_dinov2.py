@@ -376,3 +376,4 @@ class MultiSensorDINOv2Module(BraincoDINOv2Module):
 
     def validation_step(self, batch: Dict[str, Any], batch_idx: int) -> Dict:
         return self.training_step(batch, batch_idx)
+    

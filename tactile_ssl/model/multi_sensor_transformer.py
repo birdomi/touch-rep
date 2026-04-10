@@ -432,10 +432,12 @@ class MultiSensorTransformer(SignalTransformer):
         Returns:
             (B_eff, seq, D)
         """
-        if sensor_ids is None:
-            for blk in self.sensor_block[SENSOR_ID_BRAINCO]:
-                x = blk(x, bias)
-            return x
+        # if sensor_ids is None:
+
+        sid = sensor_ids[0].item() if sensor_ids is not None else SENSOR_ID_BRAINCO
+        for blk in self.sensor_block[sid]:
+            x = blk(x, bias)
+        return x
 
         out = torch.zeros_like(x)
         for sid in sensor_ids.unique().tolist():
@@ -452,7 +454,9 @@ class MultiSensorTransformer(SignalTransformer):
         self,
         sen: torch.Tensor,
         pos: torch.Tensor,
-        bias,
+        sen_mask,
+        pos_mask,
+        bias
     ):
         """Concat → Fusion blocks → sensor portion.
 
@@ -470,8 +474,24 @@ class MultiSensorTransformer(SignalTransformer):
         Returns:
             (x_prenorm, x_postnorm) both (B_eff, reg+N, D)
         """
+        # Step 1: sensor + pos 토큰을 sequence 방향으로 concat하기 전에 pos_embed + hand_embed로 위치 인코딩 보정
+        pos_embed = self.pos_embed[1,].float()
+        hand_embed = self.hand_embed[1,].float()
+        pos_embed = torch.cat([pos_embed + hand_embed[0], pos_embed + hand_embed[1]], dim=0)  # (2, 42, D) → (4, 42, D) for sensor and fusion blocks
+
+        _, b, n = sen_mask.shape
+        sen_mask = sen_mask.view(-1, n)
+        sen_pos_embed = pos_embed[sen_mask]  # (n, D)
+        sen = sen + sen_pos_embed
+
+
+        _, b, n = pos_mask.shape
+        pos_mask = pos_mask.view(-1, n)
+        pos_pos_embed = pos_embed[pos_mask]  # (n, D)
+        pos[:, 1:, :] = pos[:, 1:, :] + pos_pos_embed  # reg token X
+
         # Step 2: sensor + pos 토큰을 sequence 방향으로 concat
-        fused = torch.cat([pos, sen], dim=1)   # (B_eff, 2*(N) + reg, D)
+        fused = torch.cat([pos, sen], dim=1)   # (B_eff, 2*(N) + reg, D)        
 
         # Step 3: fusion blocks — sensor와 position이 cross-attend
         for blk in self.blocks:
@@ -607,6 +627,7 @@ class MultiSensorTransformer(SignalTransformer):
         x,   bias     = self.prepare_tokens_with_mask(x,   masks,     mask_type, masktoken_masks, skip_register=True)
         if wrist_token is not None:
             pos, pos_bias = self.prepare_tokens_with_mask(pos, _pos_masks, mask_type, None, skip_register=True)
+            # print(_pos_masks)
             # Expand wrist_token to match batch expansion from masks
             B_eff = pos.shape[0]
             if B_eff != wrist_token.shape[0]:
@@ -626,7 +647,7 @@ class MultiSensorTransformer(SignalTransformer):
         sen = self.sensor_transform(x, sensor_ids_eff, bias)
 
         # --- concat fusion: fused (B_eff, reg+n_keep_x+n_keep_p, D) --------
-        x_prenorm, x_postnorm = self.transform_concat(sen, pos, bias)
+        x_prenorm, x_postnorm = self.transform_concat(sen, pos, masks, _pos_masks, bias)
 
         r = self.num_register_tokens
         reg_tokens           = x_postnorm[:, :r]
