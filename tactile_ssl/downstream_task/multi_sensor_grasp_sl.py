@@ -45,8 +45,8 @@ class MultiSensorGraspDetectionSLModule(BraincoGraspDetectionSLModule):
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self.xela_num_frames = xela_num_frames
-        self._max_channels = xela_num_frames * getattr(self.model_encoder, "in_chans", 4)
+        # self.xela_num_frames = xela_num_frames
+        # self._max_channels = xela_num_frames * getattr(self.model_encoder, "in_chans", 4)
 
         if finetune_modules is not None and self.train_encoder:
             self._apply_partial_finetune(finetune_modules)
@@ -105,6 +105,7 @@ class MultiSensorGraspDetectionSLModule(BraincoGraspDetectionSLModule):
         B, W, N, C = sensor.shape
         _, _, N_pos, _ = sensor_poses.shape
         T = self.model_encoder.sequence_length   # 1 for standard, 5 for temporal
+        # print(B, W, N, C, T)
 
         assert W % T == 0, (
             f"Window size {W} must be divisible by encoder sequence_length {T}"
@@ -119,13 +120,14 @@ class MultiSensorGraspDetectionSLModule(BraincoGraspDetectionSLModule):
             wrist_input = wrist_poses.view(B * G, T, 2, 9)
 
         # Pad channels from in_chans → max_channels (e.g. 4 → 40)
-        if C < self._max_channels:
-            sensor_input = F.pad(sensor_input, (0, self._max_channels - C))
+        # if C < self._max_channels:
+        #     sensor_input = F.pad(sensor_input, (0, self._max_channels - C))
 
         # All samples are BrainCo (sensor_id=0)
-        sensor_ids = torch.zeros(B * G, dtype=torch.long, device=sensor.device)
+        sensor_ids = torch.ones(B * G, dtype=torch.long, device=sensor.device)
 
         with torch.no_grad() if not self.train_encoder else torch.enable_grad():
+            self.model_encoder.eval()
             out = self.model_encoder.forward_features(
                 sensor_input, poses_input,
                 wrist_poses=wrist_input,
@@ -137,7 +139,6 @@ class MultiSensorGraspDetectionSLModule(BraincoGraspDetectionSLModule):
         window_tokens = pooled_tokens.view(B, G, -1)   # (B, G, embed_dim)
 
         if mask is not None:
-            # mask: (B, W) → aggregate to (B, G) by taking any-valid per group
             mask_grouped = mask.view(B, G, T).any(dim=-1).float()  # (B, G)
             window_tokens = window_tokens * mask_grouped.unsqueeze(-1)
 

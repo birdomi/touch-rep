@@ -146,34 +146,10 @@ def _rot6d_to_mat(rot6d: np.ndarray) -> np.ndarray:
     return np.stack([c0, c1, c2], axis=-1)   # (..., 3, 3)
 
 
-def _swap_xy_world_pose(wrist_pos: np.ndarray, R_wrists: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Swap x/y axes, then flip the x-axis direction."""
-    P_swap_xy = np.array(
-        [[0.0, -1.0, 0.0],
-         [1.0, 0.0, 0.0],
-         [0.0, 0.0, 1.0]],
-        dtype=np.float32,
-    )
 
-    wrist_pos_swapped = np.einsum("ij,nsj->nsi", P_swap_xy, wrist_pos)
-    # R_wrists = R_wrists.T
-    R_wrists = np.einsum("ij,nsjk,kl->nsil", P_swap_xy, R_wrists, P_swap_xy.T)
-    wrist_rot6d_swapped = np.concatenate([R_wrists[:, :, :, 0], R_wrists[:, :, :, 1]], axis=-1)
-    return wrist_pos_swapped, wrist_rot6d_swapped
-
-def _build_g1_R_to_world_R(wrist_R, side="left"):
-    # Rotate in the global/world frame about +z.
-    # left: -90 deg, right: +90 deg
-    R_GLOBAL_Z_P90 = np.array(
-        [[0.0, -1.0, 0.0],
-         [1.0, 0.0, 0.0],
-         [0.0, 0.0, 1.0]],
-        dtype=np.float32,
-    )
-    R_GLOBAL_Z_M90 = R_GLOBAL_Z_P90.T
-    if side == "left":
-        return R_GLOBAL_Z_M90 @ wrist_R
-    return R_GLOBAL_Z_P90 @ wrist_R
+def _build_g1_R_to_world_R(R, side="left"):
+    # Visualization code expects row-major axes, so keep transpose.
+    return R.T
 
 def _compute_fk(
     urdf_path: Path,
@@ -197,6 +173,7 @@ def _compute_fk(
     skeleton_base  = np.zeros((num_frames, 44, 3), dtype=np.float32)
     wrist_pos      = np.zeros((num_frames, 2, 3),  dtype=np.float32)
     wrist_R_raw    = np.zeros((num_frames, 2, 3, 3), dtype=np.float32)
+    wrist_R_fk     = np.zeros((num_frames, 2, 3, 3), dtype=np.float32)
 
     left_arm_array  = np.array([f["states"]["left_arm"]["qpos"]  for f in frames], dtype=np.float32)
     right_arm_array = np.array([f["states"]["right_arm"]["qpos"] for f in frames], dtype=np.float32)
@@ -217,10 +194,21 @@ def _compute_fk(
         wrist_pos[i, 0]   = lh_mat[:3, 3]
         wrist_pos[i, 1]   = rh_mat[:3, 3]
 
-        lh_mat = _build_g1_R_to_world_R(lh_mat[:3, :3].T, 'left')
-        rh_mat = _build_g1_R_to_world_R(rh_mat[:3, :3].T, 'right')
+        raw_L = lh_mat[:3, :3].copy()
+        raw_R = rh_mat[:3, :3].copy()
+        lh_mat = _build_g1_R_to_world_R(raw_L, 'left')
+        rh_mat = _build_g1_R_to_world_R(raw_R, 'right')
         wrist_R_raw[i, 0] = lh_mat
         wrist_R_raw[i, 1] = rh_mat
+        # URDF fixed joint: rubber_hand → hand base_link (per side)
+        R_fxL = np.array([[ 0., 0.,  1.], [-1., 0.,  0.], [ 0., -1., 0.]], dtype=np.float32)
+        R_fxR = np.array([[ 0., 0.,  1.], [ 1., 0.,  0.], [ 0.,  1., 0.]], dtype=np.float32)
+        
+        Rz_cw  = np.array([[ 0.,  1., 0.], [-1.,  0., 0.], [ 0.,  0., 1.]], dtype=np.float32)  # CW  -90°
+        Rz_ccw = np.array([[ 0., -1., 0.], [ 1.,  0., 0.], [ 0.,  0., 1.]], dtype=np.float32)  # CCW +90°
+        _S     = np.array([[ 0., -1., 0.], [ 1.,  0., 0.], [ 0.,  0., 1.]], dtype=np.float32)
+        wrist_R_fk[i, 0] = _S @ (raw_L @ R_fxL @ Rz_cw)  @ _S.T  # left:  CW  -90°
+        wrist_R_fk[i, 1] = _S @ (raw_R @ R_fxR @ Rz_ccw) @ _S.T  # right: CCW +90°
 
         # ── Hand FK → positions relative to base_link (no world transform) ──
         lh_fk = compute_hand_fk(lh_chain, left_ee_array[i],  "left")
@@ -238,11 +226,15 @@ def _compute_fk(
             skeleton_base[i, li]      = left_joint
             skeleton_base[i, li + 22] = rh_fk[f"right_{link}"].get_matrix()[:, :3, 3].squeeze(0).numpy()
 
+    P_SWAP_XY = np.array([[0., -1., 0.], [1., 0., 0.], [0., 0., 1.]], dtype=np.float32)
+    wrist_pos = np.einsum("ij,nsj->nsi", P_SWAP_XY, wrist_pos)
+
     return {
         "fingertip_base": fingertip_base,
         "skeleton_base":  skeleton_base,
         "wrist_pos":      wrist_pos,
-        "wrist_R":    wrist_R_raw,
+        "wrist_R":        wrist_R_raw,
+        "wrist_R_fk":     wrist_R_fk,
     }
 
 
@@ -272,7 +264,6 @@ def compute_wrist_poses_vroot(wrist_pos: np.ndarray, wrist_rot6d: np.ndarray) ->
         pos_vr = (wrist_pos[:, side] - root_pos).astype(np.float32)   # (N, 3)
         rot6d = wrist_rot6d[:, side].astype(np.float32)                # (N, 6)
         wrist_poses[:, side] = np.concatenate([pos_vr, rot6d], axis=-1)
-
     return wrist_poses
 
 
@@ -312,6 +303,7 @@ class BraincoSSLDataset(data.Dataset):
         self.window_time = config.window_time
         self.interpolating_freq = config.interpolating_freq
         self.num_frames_per_window = int(round(self.window_time * self.interpolating_freq))
+        self.max_values = [25000, 25000, 365, 500000]
 
         overlap = config.get("window_overlap", 0.0)
         assert 0 <= overlap < 1, "window_overlap must be in [0, 1)"
@@ -340,29 +332,32 @@ class BraincoSSLDataset(data.Dataset):
         fingertip_base  = fk["fingertip_base"]   # (N, 10, 3) base_link-relative
         skeleton_base   = fk["skeleton_base"]    # (N, 44, 3) base_link-relative
         wrist_pos       = fk["wrist_pos"]        # (N, 2, 3)  world
-        wrist_R         = fk["wrist_R"]     # (N, 2, 3, 3) raw G1 FK rotations
 
         # ── fingertip_rel: base_link coords are already wrist-local ──────
         # Hand FK output is relative to base_link = wrist frame directly.
         self.fingertip_rel  = fingertip_base               # (N, 10, 3)
         self.fingertip_base = fingertip_base               # (N, 10, 3) — kept for visualization
 
-        # ── skeleton_rel: skip base_link (idx 0 / 22) ────────────────────
-        # skeleton_base: left 0-21 (0=base_link), right 22-43 (22=base_link)
+        # ── skeleton_rel: keep base_link (idx 0/22), skip thumb_metacarpal (idx 1/23) ──
+        # skeleton_base: left 0-21 (0=base_link, 1=thumb_metacarpal_link), right 22-43
         skeleton_rel = np.concatenate([
-            skeleton_base[:, 1:22],   # left  joints 1-21 (skip base_link)
-            skeleton_base[:, 23:44],  # right joints 23-43 (skip base_link)
+            skeleton_base[:, 0:1],    # left  base_link
+            skeleton_base[:, 2:22],   # left  joints 2-21 (skip thumb_metacarpal)
+            skeleton_base[:, 22:23],  # right base_link
+            skeleton_base[:, 24:44],  # right joints 24-43 (skip thumb_metacarpal)
         ], axis=1)  # (N, 42, 3)
         self.skeleton_rel  = skeleton_rel
         self.skeleton_base = skeleton_base                 # (N, 44, 3) — kept for visualization
 
-        # ── wrist world poses for visualization: x/y-swapped world frame ──
-        wrist_pos_world, wrist_rot6d_world = _swap_xy_world_pose(wrist_pos, wrist_R)
-        self.wrist_pos_world   = wrist_pos_world      # (N, 2, 3)
-        self.wrist_rot6d_world = wrist_rot6d_world    # (N, 2, 6)
+        # ── wrist world poses: 6D rotation from wrist_R_fk ──────────────────
+        wrist_R_fk_arr = fk["wrist_R_fk"]                        # (N, 2, 3, 3)
+        wrist_rot6d = np.concatenate([wrist_R_fk_arr[:, :, 0, :], wrist_R_fk_arr[:, :, 1, :]], axis=-1)  # (N, 2, 6)
+        self.wrist_pos_world   = wrist_pos            # (N, 2, 3)
+        self.wrist_rot6d_world = wrist_rot6d          # (N, 2, 6)
+        self.wrist_R_fk        = wrist_R_fk_arr       # (N, 2, 3, 3) raw rubber_hand rotation in vis world
 
         # ── wrist_poses: position + orientation in vroot frame ───────────
-        self.wrist_poses = compute_wrist_poses_vroot(wrist_pos_world, wrist_rot6d_world)  # (N, 2, 9)
+        self.wrist_poses = compute_wrist_poses_vroot(wrist_pos, wrist_rot6d)  # (N, 2, 9)
 
         log.info(f"  fingertip_rel shape:  {self.fingertip_rel.shape}")
         log.info(f"  skeleton_rel shape:   {self.skeleton_rel.shape}")
@@ -391,7 +386,7 @@ class BraincoSSLDataset(data.Dataset):
         invalid_mask = self.tactile_array[..., 2] == 65535
         self.tactile_array[..., 2][invalid_mask] = -1
 
-        log.info(f"  tactile_array shape: {self.tactile_array.shape}")
+        log.info(f"tactile_array shape: {self.tactile_array.shape}")
 
         # ── Window indices ───────────────────────────────────────────────
         max_start = self.num_frames - self.num_frames_per_window
@@ -401,15 +396,13 @@ class BraincoSSLDataset(data.Dataset):
     def __len__(self) -> int:
         return len(self.data_idxs)
 
-    def update_normalization(self, mean, std):
-        self.tactile_mean = mean
-        self.tactile_std = std
 
     def __getitem__(self, idx: int) -> dict:
         start = self.data_idxs[idx]
         end = start + self.num_frames_per_window
 
         sensor = torch.from_numpy(self.tactile_array[start:end].copy())  # (W, 10, 4)
+        sensor = sensor / torch.tensor(self.max_values).view(1, 1, -1)  # normalize to [0, 1]
         fingertip_poses = torch.from_numpy(self.fingertip_rel[start:end].copy())  # (W, 10, 3)
         skeleton_poses = torch.from_numpy(self.skeleton_rel[start:end].copy())  # (W, 42, 3)
         frame_indices = torch.arange(start, end, dtype=torch.long)

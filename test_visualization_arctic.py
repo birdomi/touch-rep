@@ -384,7 +384,7 @@ def _render_and_save(bc, ok, out_path: str):
     nrows = 4  # local BC, local OK, global BC, global OK
 
     fig = plt.figure(figsize=(4.8 * ncols, 5.5 * nrows), constrained_layout=True)
-    fig.suptitle("BrainCo vs OakInkV2  —  Local (rows 0-1) / Global vroot (rows 2-3)", fontsize=11)
+    fig.suptitle("BrainCo vs Arctic  —  Local (rows 0-1) / Global vroot (rows 2-3)", fontsize=11)
 
     def make_row(row, with_rgb: bool = False, rgb: Optional[np.ndarray] = None, rgb_title: str = "RGB"):
         if with_rgb:
@@ -424,8 +424,8 @@ def main():
     parser.add_argument("--brainco_urdf",   default="dataset/brainco/urdf")
     parser.add_argument("--brainco_frame",  type=int, default=0, help="frame within window (-1=middle)")
     parser.add_argument("--frame_step",     type=int, default=100, help="sample index step for multi-frame output")
-    parser.add_argument("--oakink_root",    default="pretraining_dataset/OakInkv2")
-    parser.add_argument("--oakink_seq",     type=int, default=0, help="pkl file index (-1=middle)")
+    parser.add_argument("--oakink_root",    default="pretraining_dataset/Arctic")
+    parser.add_argument("--oakink_seq",     type=int, default=1, help="pkl file index (-1=middle)")
     parser.add_argument("--oakink_frame",   type=int, default=0,  help="frame within window")
     parser.add_argument("--out",            default="vis/compare.png")
     args = parser.parse_args()

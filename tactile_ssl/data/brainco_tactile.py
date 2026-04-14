@@ -147,32 +147,9 @@ def _rot6d_to_mat(rot6d: np.ndarray) -> np.ndarray:
 
 
 
-def _build_g1_R_to_world_R(wrist_R, side="left"):
-    # Rotate in the world (skeleton) frame about +x (+90 deg).
-    R_WORLD_X_P90 = np.array(
-        [[1.0, 0.0,  0.0],
-         [0.0, 0.0, -1.0],
-         [0.0, 1.0,  0.0]],
-        dtype=np.float32,
-    )
-    P_SWAP_XY = np.array(
-        [[0.0, -1.0, 0.0],
-         [1.0, 0.0, 0.0],
-         [0.0, 0.0, 1.0]],
-        dtype=np.float32,
-    )
-    R_LOCAL_Y_180 = np.array(
-        [[-1.0, 0.0,  0.0],
-         [ 0.0, 1.0,  0.0],
-         [ 0.0, 0.0, -1.0]],
-        dtype=np.float32,
-    )
-    R = P_SWAP_XY @ wrist_R @ P_SWAP_XY.T
-    R = R_WORLD_X_P90 @ R
-    # if side == "right":
-    R = R @ R_LOCAL_Y_180
-
-    return R
+def _build_g1_R_to_world_R(R, side="left"):
+    # Visualization code expects row-major axes, so keep transpose.
+    return R.T
 
 def _compute_fk(
     urdf_path: Path,
@@ -196,6 +173,7 @@ def _compute_fk(
     skeleton_base  = np.zeros((num_frames, 44, 3), dtype=np.float32)
     wrist_pos      = np.zeros((num_frames, 2, 3),  dtype=np.float32)
     wrist_R_raw    = np.zeros((num_frames, 2, 3, 3), dtype=np.float32)
+    wrist_R_fk     = np.zeros((num_frames, 2, 3, 3), dtype=np.float32)
 
     left_arm_array  = np.array([f["states"]["left_arm"]["qpos"]  for f in frames], dtype=np.float32)
     right_arm_array = np.array([f["states"]["right_arm"]["qpos"] for f in frames], dtype=np.float32)
@@ -216,10 +194,21 @@ def _compute_fk(
         wrist_pos[i, 0]   = lh_mat[:3, 3]
         wrist_pos[i, 1]   = rh_mat[:3, 3]
 
-        lh_mat = _build_g1_R_to_world_R(lh_mat[:3, :3], 'left')
-        rh_mat = _build_g1_R_to_world_R(rh_mat[:3, :3], 'right')
+        raw_L = lh_mat[:3, :3].copy()
+        raw_R = rh_mat[:3, :3].copy()
+        lh_mat = _build_g1_R_to_world_R(raw_L, 'left')
+        rh_mat = _build_g1_R_to_world_R(raw_R, 'right')
         wrist_R_raw[i, 0] = lh_mat
         wrist_R_raw[i, 1] = rh_mat
+        # URDF fixed joint: rubber_hand → hand base_link (per side)
+        R_fxL = np.array([[ 0., 0.,  1.], [-1., 0.,  0.], [ 0., -1., 0.]], dtype=np.float32)
+        R_fxR = np.array([[ 0., 0.,  1.], [ 1., 0.,  0.], [ 0.,  1., 0.]], dtype=np.float32)
+        
+        Rz_cw  = np.array([[ 0.,  1., 0.], [-1.,  0., 0.], [ 0.,  0., 1.]], dtype=np.float32)  # CW  -90°
+        Rz_ccw = np.array([[ 0., -1., 0.], [ 1.,  0., 0.], [ 0.,  0., 1.]], dtype=np.float32)  # CCW +90°
+        _S     = np.array([[ 0., -1., 0.], [ 1.,  0., 0.], [ 0.,  0., 1.]], dtype=np.float32)
+        wrist_R_fk[i, 0] = _S @ (raw_L @ R_fxL @ Rz_cw)  @ _S.T  # left:  CW  -90°
+        wrist_R_fk[i, 1] = _S @ (raw_R @ R_fxR @ Rz_ccw) @ _S.T  # right: CCW +90°
 
         # ── Hand FK → positions relative to base_link (no world transform) ──
         lh_fk = compute_hand_fk(lh_chain, left_ee_array[i],  "left")
@@ -244,7 +233,8 @@ def _compute_fk(
         "fingertip_base": fingertip_base,
         "skeleton_base":  skeleton_base,
         "wrist_pos":      wrist_pos,
-        "wrist_R":    wrist_R_raw,
+        "wrist_R":        wrist_R_raw,
+        "wrist_R_fk":     wrist_R_fk,
     }
 
 
@@ -274,7 +264,6 @@ def compute_wrist_poses_vroot(wrist_pos: np.ndarray, wrist_rot6d: np.ndarray) ->
         pos_vr = (wrist_pos[:, side] - root_pos).astype(np.float32)   # (N, 3)
         rot6d = wrist_rot6d[:, side].astype(np.float32)                # (N, 6)
         wrist_poses[:, side] = np.concatenate([pos_vr, rot6d], axis=-1)
-
     return wrist_poses
 
 
@@ -293,6 +282,15 @@ class BraincoSSLDataset(data.Dataset):
                            If True, sensor_poses is (W, 42, 3) for all skeleton
                            joints (left 0-20, right 21-41) relative to own wrist.
 
+        robot_to_human:    If True, converts both hand qpos to human 21-joint skeleton
+                           (MediaPipe format) via RobotToHumanRetargeter and uses the
+                           result as skeleton_poses (W, 42, 3) [left 0-20, right 21-41].
+                           Requires dex-retargeting config YAMLs at brainco_urdf_path.
+        retargeting_config_path_left:  Path to dex-retargeting YAML for left hand.
+                           Defaults to {brainco_urdf_path}/revo2_left_hand.yml.
+        retargeting_config_path_right: Path to dex-retargeting YAML for right hand.
+                           Defaults to {brainco_urdf_path}/revo2_right_hand.yml.
+
     Output per sample:
         sensor:       Tensor(W, 10, 4)  — tactile data, ch2 null(65535)→-1
         sensor_poses: Tensor(W, 10, 3) or (W, 42, 3)
@@ -308,6 +306,9 @@ class BraincoSSLDataset(data.Dataset):
         object_class: Optional[int] = None,
         load_images: bool = False,
         joint_poses: bool = False,
+        robot_to_human: bool = False,
+        retargeting_config_path_left: Optional[str] = None,
+        retargeting_config_path_right: Optional[str] = None,
     ):
         self._load_images = load_images  # reserved for future RGB loading
         # ── Window config ────────────────────────────────────────────────
@@ -324,6 +325,7 @@ class BraincoSSLDataset(data.Dataset):
 
         self.object_label = object_class
         self.joint_poses = joint_poses
+        self.robot_to_human = robot_to_human
 
         # ── Load data.json ───────────────────────────────────────────────
         self.data_path = Path(data_path)
@@ -343,7 +345,6 @@ class BraincoSSLDataset(data.Dataset):
         fingertip_base  = fk["fingertip_base"]   # (N, 10, 3) base_link-relative
         skeleton_base   = fk["skeleton_base"]    # (N, 44, 3) base_link-relative
         wrist_pos       = fk["wrist_pos"]        # (N, 2, 3)  world
-        wrist_R         = fk["wrist_R"]     # (N, 2, 3, 3) G1 FK rotations
 
         # ── fingertip_rel: base_link coords are already wrist-local ──────
         # Hand FK output is relative to base_link = wrist frame directly.
@@ -361,10 +362,12 @@ class BraincoSSLDataset(data.Dataset):
         self.skeleton_rel  = skeleton_rel
         self.skeleton_base = skeleton_base                 # (N, 44, 3) — kept for visualization
 
-        # ── wrist world poses: extract 6D from FK rotation matrix directly ──
-        wrist_rot6d = np.concatenate([wrist_R[:, :, :, 0], wrist_R[:, :, :, 1]], axis=-1)  # (N, 2, 6)
-        self.wrist_pos_world   = wrist_pos       # (N, 2, 3)
-        self.wrist_rot6d_world = wrist_rot6d     # (N, 2, 6)
+        # ── wrist world poses: 6D rotation from wrist_R_fk ──────────────────
+        wrist_R_fk_arr = fk["wrist_R_fk"]                        # (N, 2, 3, 3)
+        wrist_rot6d = np.concatenate([wrist_R_fk_arr[:, :, 0, :], wrist_R_fk_arr[:, :, 1, :]], axis=-1)  # (N, 2, 6)
+        self.wrist_pos_world   = wrist_pos            # (N, 2, 3)
+        self.wrist_rot6d_world = wrist_rot6d          # (N, 2, 6)
+        self.wrist_R_fk        = wrist_R_fk_arr       # (N, 2, 3, 3) raw rubber_hand rotation in vis world
 
         # ── wrist_poses: position + orientation in vroot frame ───────────
         self.wrist_poses = compute_wrist_poses_vroot(wrist_pos, wrist_rot6d)  # (N, 2, 9)
@@ -372,6 +375,38 @@ class BraincoSSLDataset(data.Dataset):
         log.info(f"  fingertip_rel shape:  {self.fingertip_rel.shape}")
         log.info(f"  skeleton_rel shape:   {self.skeleton_rel.shape}")
         log.info(f"  wrist_poses shape:    {self.wrist_poses.shape}")
+
+        # ── Robot → Human skeleton retargeting ───────────────────────────
+        if robot_to_human:
+            from tactile_ssl.data.robot_to_hand import RobotToHumanRetargeter
+            urdf_root = Path(brainco_urdf_path)
+            cfg_left  = retargeting_config_path_left  or str(urdf_root / "revo2_left_hand.yml")
+            cfg_right = retargeting_config_path_right or str(urdf_root / "revo2_right_hand.yml")
+
+            log.info(f"  Building RobotToHumanRetargeter (left:  {cfg_left})")
+            left_retargeter  = RobotToHumanRetargeter(cfg_left,  side="left")
+            log.info(f"  Building RobotToHumanRetargeter (right: {cfg_right})")
+            right_retargeter = RobotToHumanRetargeter(cfg_right, side="right")
+
+            left_ee_array  = np.array([f["states"]["left_ee"]["qpos"]  for f in frames], dtype=np.float32)
+            right_ee_array = np.array([f["states"]["right_ee"]["qpos"] for f in frames], dtype=np.float32)
+
+            log.info(f"  Running human retargeting for {self.num_frames} frames ...")
+            human_left  = left_retargeter.batch_forward(list(left_ee_array))   # (N, 21, 3)
+            human_right = right_retargeter.batch_forward(list(right_ee_array)) # (N, 21, 3)
+
+            # Mirror left hand: negate y-axis so +y points pinky→thumb,
+            # matching the sign convention applied in _compute_fk (left_joint[1] *= -1).
+            human_left = human_left.copy()
+            human_left[:, :, 1] *= -1.0
+
+            # Concatenate: left joints 0-20, right joints 21-41 → (N, 42, 3)
+            self.human_skeleton = np.concatenate(
+                [human_left, human_right], axis=1
+            ).astype(np.float32)
+            log.info(f"  human_skeleton shape: {self.human_skeleton.shape}")
+        else:
+            self.human_skeleton = None
 
         # ── Tactile data ─────────────────────────────────────────────────
         tactile_list = []
@@ -396,7 +431,7 @@ class BraincoSSLDataset(data.Dataset):
         invalid_mask = self.tactile_array[..., 2] == 65535
         self.tactile_array[..., 2][invalid_mask] = -1
 
-        log.info(f"  tactile_array shape: {self.tactile_array.shape}")
+        log.info(f"tactile_array shape: {self.tactile_array.shape}")
 
         # ── Window indices ───────────────────────────────────────────────
         max_start = self.num_frames - self.num_frames_per_window
@@ -414,7 +449,10 @@ class BraincoSSLDataset(data.Dataset):
         sensor = torch.from_numpy(self.tactile_array[start:end].copy())  # (W, 10, 4)
         sensor = sensor / torch.tensor(self.max_values).view(1, 1, -1)  # normalize to [0, 1]
         fingertip_poses = torch.from_numpy(self.fingertip_rel[start:end].copy())  # (W, 10, 3)
-        skeleton_poses = torch.from_numpy(self.skeleton_rel[start:end].copy())  # (W, 42, 3)
+        if self.human_skeleton is not None:
+            skeleton_poses = torch.from_numpy(self.human_skeleton[start:end].copy())  # (W, 42, 3)
+        else:
+            skeleton_poses = torch.from_numpy(self.skeleton_rel[start:end].copy())  # (W, 42, 3)
         frame_indices = torch.arange(start, end, dtype=torch.long)
 
         if self.joint_poses:

@@ -57,76 +57,68 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
         fold      (int, default 0): which fold to use as validation
         num_folds (int, default 5): total number of folds (5 → 80/20 split)
     """
-    import re
+    import random
     from pathlib import Path
     from collections import Counter
 
     data_cfg = cfg.data
     fold = int(cfg.get("fold", 0))
     num_folds = int(cfg.get("num_folds", 5))
+    shuffle_seed = int(cfg.get("split_seed", 42))
 
-    # 3-1-1 split:  val=fold k,  test=fold (k+1)%num_folds,  train=remaining
-    test_fold = (fold + 1) % num_folds
+    # train-val split: val=fold k, train=remaining
+    val_fold = fold % num_folds
 
     # Instantiate the full dataset (all episodes)
     dataset = hydra.utils.instantiate(data_cfg.dataset)
 
-    # Sort episodes by episode number extracted from path name
-    def _ep_sort_key(ep_data):
-        match = re.search(r'(\d+)', Path(ep_data["path"]).name)
-        return int(match.group(1)) if match else 0
-
-    sorted_episodes = sorted(dataset.episode_data, key=_ep_sort_key)
-    num_episodes = len(sorted_episodes)
-
-    # Contiguous block split: divide sorted episodes into num_folds equal blocks.
-    def _fold_range(k):
-        fold_size = num_episodes // num_folds
-        start = k * fold_size
-        end = start + fold_size if k < num_folds - 1 else num_episodes
-        return set(range(start, end))
-
-    val_ep_set  = _fold_range(fold)
-    test_ep_set = _fold_range(test_fold)
-
-    # Build window index lists using sorted episode order
+    # Build window start index map (keyed by episode path)
     ep_window_start = {}
     current_idx = 0
     for ep_data in dataset.episode_data:
         ep_window_start[ep_data["path"]] = current_idx
         current_idx += len(ep_data["window_starts"])
 
-    train_indices, val_indices, test_indices = [], [], []
-    train_ep_names, val_ep_names, test_ep_names = [], [], []
+    # Shuffle all episodes with fixed seed, then split into num_folds blocks
+    all_episodes = list(dataset.episode_data)
+    rng = random.Random(shuffle_seed)
+    rng.shuffle(all_episodes)
+    num_episodes = len(all_episodes)
 
-    for rank, ep_data in enumerate(sorted_episodes):
+    def _fold_range(k):
+        fold_size = num_episodes // num_folds
+        start = k * fold_size
+        end = start + fold_size if k < num_folds - 1 else num_episodes
+        return range(start, end)
+
+    val_range = _fold_range(val_fold)
+
+    train_indices, val_indices = [], []
+    train_ep_names, val_ep_names = [], []
+
+    for rank, ep_data in enumerate(all_episodes):
         num_windows = len(ep_data["window_starts"])
         start = ep_window_start[ep_data["path"]]
         window_range = list(range(start, start + num_windows))
         ep_name = Path(ep_data["path"]).parent.name + "/" + Path(ep_data["path"]).name
-        if rank in val_ep_set:
+        if rank in val_range:
             val_indices.extend(window_range)
             val_ep_names.append(ep_name)
-        elif rank in test_ep_set:
-            test_indices.extend(window_range)
-            test_ep_names.append(ep_name)
         else:
             train_indices.extend(window_range)
             train_ep_names.append(ep_name)
 
-    print(f"\n=== Episode 3-1-1 Split (val_fold={fold}, test_fold={test_fold}/{num_folds}, total={num_episodes} episodes) ===")
-    print(f"  Train: {len(train_ep_names)} episodes")
+    lines = []
+    lines.append(f"\n=== Episode Random Split (val_fold={val_fold}/{num_folds}, total={num_episodes} episodes, seed={shuffle_seed}) ===")
+    lines.append(f"  Train: {len(train_ep_names)} episodes")
     for name in train_ep_names:
-        print(f"    [train] {name}")
-    print(f"  Val: {len(val_ep_names)} episodes")
+        lines.append(f"    [train] {name}")
+    lines.append(f"  Val: {len(val_ep_names)} episodes")
     for name in val_ep_names:
-        print(f"    [val]   {name}")
-    print(f"  Test: {len(test_ep_names)} episodes")
-    for name in test_ep_names:
-        print(f"    [test]  {name}")
+        lines.append(f"    [val]   {name}")
 
     # ── Compute normalization stats from train windows ────────────────────
-    print("Computing normalization stats from training data ...")
+    lines.append("Computing normalization stats from training data ...")
     all_sensor = torch.stack([dataset.windows[i]["sensor"] for i in train_indices])      # (N, W, 10, 4)
     all_poses  = torch.stack([dataset.windows[i]["sensor_poses"] for i in train_indices])  # (N, W, 10, 3)
 
@@ -147,10 +139,10 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
     pos_mean  = pose_flat.mean(dim=0)
     pos_std   = pose_flat.std(dim=0).clamp(min=1e-6)
 
-    print(f"[NormStats] signal_mean (per ch): {sensor_mean_1d.tolist()}")
-    print(f"[NormStats] signal_std  (per ch): {sensor_std_1d.tolist()}")
-    print(f"[NormStats] pos_mean:             {pos_mean.tolist()}")
-    print(f"[NormStats] pos_std:              {pos_std.tolist()}")
+    lines.append(f"[NormStats] signal_mean (per ch): {sensor_mean_1d.tolist()}")
+    lines.append(f"[NormStats] signal_std  (per ch): {sensor_std_1d.tolist()}")
+    lines.append(f"[NormStats] pos_mean:             {pos_mean.tolist()}")
+    lines.append(f"[NormStats] pos_std:              {pos_std.tolist()}")
 
     dataset.computed_signal_mean = signal_mean
     dataset.computed_signal_std  = signal_std
@@ -160,7 +152,6 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
 
     train_dset = data.Subset(dataset, train_indices)
     val_dset   = data.Subset(dataset, val_indices)
-    test_dset  = data.Subset(dataset, test_indices)
 
     # Class distribution
     CLASS_NAMES = {0: "Fail", 1: "Success"}
@@ -168,17 +159,24 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
     def _class_dist(indices):
         return Counter(dataset.windows[i]["label"].item() for i in indices)
 
-    def _print_dist(name, dist, total):
-        print(f"  {name}:")
+    def _append_dist(lines, name, dist, total):
+        lines.append(f"  {name}:")
         for cls in sorted(dist):
             cnt = dist[cls]
-            print(f"    [{cls}] {CLASS_NAMES.get(cls, cls):10s}: {cnt:5d}  ({100*cnt/total:.1f}%)")
+            lines.append(f"    [{cls}] {CLASS_NAMES.get(cls, cls):10s}: {cnt:5d}  ({100*cnt/total:.1f}%)")
 
-    print("=== Class Distribution ===")
-    _print_dist("Train", _class_dist(train_indices), len(train_indices))
-    _print_dist("Val  ", _class_dist(val_indices),   len(val_indices))
-    _print_dist("Test ", _class_dist(test_indices),  len(test_indices))
-    print("=" * 26 + "\n")
+    lines.append("=== Class Distribution ===")
+    _append_dist(lines, "Train", _class_dist(train_indices), len(train_indices))
+    _append_dist(lines, "Val  ", _class_dist(val_indices),   len(val_indices))
+    lines.append("=" * 26 + "\n")
+
+    # Print to console and save to txt file
+    split_log = "\n".join(lines)
+    print(split_log)
+
+    split_log_path = Path(cfg.paths.output_dir) / f"split_fold{val_fold}.txt"
+    split_log_path.write_text(split_log)
+    print(f"[Split log saved to {split_log_path}]")
 
     # Initialize generator for budget splits
     g = torch.Generator()
@@ -196,15 +194,14 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
         budget_size = int(len(val_dset) * data_cfg.val_data_budget)
         val_dset, _ = data.random_split(val_dset, [budget_size, len(val_dset) - budget_size], generator=g)
 
-    print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val, {len(test_dset)} test")
+    print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val")
 
     train_loader_args = dict(cfg.data.train_dataloader)
     val_loader_args   = dict(cfg.data.val_dataloader)
 
-    train_dataloader = data.DataLoader(train_dset, **train_loader_args)
+    train_dataloader = data.DataLoader(train_dset, generator=g, **train_loader_args)
     val_dataloader   = data.DataLoader(val_dset,   **val_loader_args)
-    test_dataloader  = data.DataLoader(test_dset,  **val_loader_args)
-    return train_dataloader, val_dataloader, test_dataloader
+    return train_dataloader, val_dataloader
 
 
 def get_dataloaders(cfg: DictConfig):
@@ -219,8 +216,8 @@ def get_dataloaders(cfg: DictConfig):
     elif data_cfg.sensor == "xela":
         train_dataloader, val_dataloader = get_dataloader_xela(cfg)
     elif data_cfg.sensor in ("brainco_grasp", "brainco_grasp_prediction", "brainco_grasp_multimodal"):
-        train_dataloader, val_dataloader, test_dataloader = get_dataloader_brainco_grasp(cfg)
-        return train_dataloader, val_dataloader, test_dataloader
+        train_dataloader, val_dataloader = get_dataloader_brainco_grasp(cfg)
+        return train_dataloader, val_dataloader, None
     else:
         raise NotImplementedError(f"Sensor type '{data_cfg.sensor}' not implemented yet.")
     return train_dataloader, val_dataloader, None
@@ -269,7 +266,8 @@ def train(cfg: DictConfig):
     _GLOBAL_SEED = cfg.seed
     np.random.seed(_GLOBAL_SEED)
     torch.manual_seed(_GLOBAL_SEED)
-    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
 
     logger.info(f"Instantiating dataset & dataloaders for <{cfg.data.dataset._target_}>")
     train_dataloader, val_dataloader, test_dataloader = get_dataloaders(cfg)
@@ -294,26 +292,21 @@ def train(cfg: DictConfig):
 
     trainer.fit(model, train_dataloader, val_dataloader, ckpt_path=cfg.ckpt_path)
 
-    # Evaluate on test set using best-val weights
-    test_metrics = {}
-    if test_dataloader is not None and hasattr(model, "evaluate_test"):
-        logger.info("Evaluating on test set with best-val weights ...")
-        test_dataloader = trainer.fabric.setup_dataloaders(
-            test_dataloader, use_distributed_sampler=trainer.use_distributed_sampler
-        )
-        test_metrics = model.evaluate_test(test_dataloader, trainer)
-        logger.info(f"Test metrics: {test_metrics}")
-        wandb.log({
-            "test/overall_accuracy": test_metrics.get("accuracy", float("nan")),
-            "test/f1_score": test_metrics.get("f1", float("nan")),
-        })
+    last_metrics = getattr(model, "last_val_metrics", {})
+    best_metrics = getattr(model, "best_val_metrics", {})
+
+    print(f"\n{'='*40}")
+    print(f"  TRAINING COMPLETE")
+    print(f"{'='*40}")
+    print(f"  Last Epoch  — Accuracy: {last_metrics.get('accuracy', float('nan')):.4f}  F1: {last_metrics.get('f1', float('nan')):.4f}")
+    print(f"  Best Epoch  — Accuracy: {best_metrics.get('accuracy', float('nan')):.4f}  F1: {best_metrics.get('f1', float('nan')):.4f}")
+    print(f"{'='*40}\n")
 
     wandb.finish()
 
     return {
-        "last": getattr(model, "last_val_metrics", {}),
-        "best": getattr(model, "best_val_metrics", {}),
-        "test": test_metrics,
+        "last": last_metrics,
+        "best": best_metrics,
     }
 
 
@@ -324,7 +317,7 @@ def main(cfg: DictConfig):
     Main function to train the model
     """
     if cfg.get("all_split", False):
-        num_folds = int(cfg.get("num_folds", 5))
+        num_folds = int(cfg.get("num_folds", 4))
         base_wandb_id = cfg.wandb.id
         base_checkpoint_dir = cfg.trainer.save_checkpoint_dir
         all_metrics = {}
@@ -365,24 +358,6 @@ def main(cfg: DictConfig):
             print(f"{'Std':>6}  {np.std(accuracies):>10.4f}  {np.std(f1s):>10.4f}")
             print(f"{'='*60}")
 
-        # Test results (evaluated with best-val weights per fold)
-        print(f"\n{'='*60}")
-        print(f"  K-FOLD TEST RESULTS (best-val weights)")
-        print(f"{'='*60}")
-        print(f"{'Fold':>6}  {'Accuracy':>10}  {'F1 Score':>10}")
-        print(f"{'-'*34}")
-        test_accs, test_f1s = [], []
-        for fold in range(num_folds):
-            m = all_metrics.get(fold, {}).get("test", {})
-            acc = m.get("accuracy", float("nan"))
-            f1  = m.get("f1",       float("nan"))
-            test_accs.append(acc)
-            test_f1s.append(f1)
-            print(f"{fold:>6}  {acc:>10.4f}  {f1:>10.4f}")
-        print(f"{'-'*34}")
-        print(f"{'Mean':>6}  {np.mean(test_accs):>10.4f}  {np.mean(test_f1s):>10.4f}")
-        print(f"{'Std':>6}  {np.std(test_accs):>10.4f}  {np.std(test_f1s):>10.4f}")
-        print(f"{'='*60}")
     else:
         train(cfg)
 

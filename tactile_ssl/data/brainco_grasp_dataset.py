@@ -17,7 +17,6 @@ __getitem__ output:
 
 from pathlib import Path
 
-import numpy as np
 import torch
 
 from omegaconf import DictConfig
@@ -46,6 +45,10 @@ class BraincoGraspDetectionDataset(BraincoSSLDataset):
                            (pose_type is accepted but currently unused).
         data_path:         Root directory containing grasp_success/ and grasp_fail/.
         brainco_urdf_path: URDF root directory (g1.urdf, hand URDFs).
+        use_skeleton_poses:          If True, use skeleton_poses instead of fingertip sensor_poses.
+        robot_to_human:              Forwarded to BraincoSSLDataset — converts qpos to human skeleton.
+        retargeting_config_path_left:  Forwarded to BraincoSSLDataset.
+        retargeting_config_path_right: Forwarded to BraincoSSLDataset.
     """
 
     # Mapping from subdirectory name to integer label
@@ -59,6 +62,10 @@ class BraincoGraspDetectionDataset(BraincoSSLDataset):
         config: DictConfig,
         data_path: str,
         brainco_urdf_path: str = "dataset/brainco/urdf",
+        use_skeleton_poses: bool = False,
+        robot_to_human: bool = False,
+        retargeting_config_path_left: str = None,
+        retargeting_config_path_right: str = None,
     ):
         # Do NOT call super().__init__() — we manage multiple episodes here.
         self.episode_data: list = []
@@ -86,6 +93,9 @@ class BraincoGraspDetectionDataset(BraincoSSLDataset):
                         data_path=str(ep_path),
                         brainco_urdf_path=brainco_urdf_path,
                         object_class=label,
+                        robot_to_human=robot_to_human,
+                        retargeting_config_path_left=retargeting_config_path_left,
+                        retargeting_config_path_right=retargeting_config_path_right,
                     )
                 except Exception as exc:
                     log.warning(f"  Skipping {ep_path}: {exc}")
@@ -98,32 +108,30 @@ class BraincoGraspDetectionDataset(BraincoSSLDataset):
                     continue
 
                 # ── episode_data entry ──────────────────────────────────
+                print(ep_path, label)
                 self.episode_data.append({
                     "path":          str(ep_path),
                     "window_starts": ep_ds.data_idxs.copy(),
                     "label":         label,
                 })
 
-                # ── Use wrist-local fingertip positions from SSL class ───────
-                # fingertip_rel: (N, 10, 3) — fingertip in own-wrist local frame
-                # wrist_poses:   (N, 2, 9)  — [translation(3), rotation_6d(6)]
-                W = ep_ds.num_frames_per_window
-
-                # ── Flatten windows ────────────────────────────────────
+                # ── Flatten windows using ep_ds.__getitem__ ─────────────
                 label_tensor = torch.tensor(label, dtype=torch.long)
-                for start in ep_ds.data_idxs:
-                    end = start + W
-                    self.windows.append({
-                        "sensor":             torch.from_numpy(
-                                                  ep_ds.tactile_array[start:end].copy()),
-                        "sensor_poses":       torch.from_numpy(
-                                                  ep_ds.fingertip_rel[start:end].copy()),
-                        "wrist_poses":        torch.from_numpy(
-                                                  ep_ds.wrist_poses[start:end].copy()),
-                        "label":              label_tensor,
-                        "episode_path":       str(ep_path),
-                        "window_start_frame": int(start),
-                    })
+                for w_idx in range(len(ep_ds)):
+                    sample = ep_ds[w_idx]
+                    sample["episode_path"] = str(ep_path)
+                    sample["window_start_frame"] = int(ep_ds.data_idxs[w_idx])
+                    
+                    new_sample = {}
+                    new_sample["label"] = label_tensor
+                    new_sample['sensor'] = sample['sensor']
+                    if use_skeleton_poses:
+                        new_sample['sensor_poses'] = sample['skeleton_poses']
+                    else:
+                        new_sample['sensor_poses'] = sample['sensor_poses']
+                    new_sample['wrist_poses'] = sample['wrist_poses']
+
+                    self.windows.append(new_sample)
 
         log.info(
             f"BraincoGraspDetectionDataset ready: "
