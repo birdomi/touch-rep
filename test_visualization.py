@@ -418,8 +418,8 @@ def _render_and_save(bc, ok, out_path: str):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--brainco_ep",     default="dataset/brainco/pretraining/pot/episode_0000")
-    # parser.add_argument("--brainco_ep",     default="dataset/brainco/downstream/grasp_prediction/grasp_fail/episode_0000")
+    # parser.add_argument("--brainco_ep",     default="dataset/brainco/pretraining/pot/episode_0000")
+    parser.add_argument("--brainco_ep",     default="dataset/brainco/downstream/grasp_detection/grasp_fail/episode_0000")
 
     parser.add_argument("--brainco_urdf",   default="dataset/brainco/urdf")
     parser.add_argument("--brainco_frame",  type=int, default=0, help="frame within window (-1=middle)")

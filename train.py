@@ -738,18 +738,19 @@ def get_dataloaders_gigahands_based(cfg: DictConfig):
     # ── Compute pose normalization stats for OakInkV2 wrist-local poses ─────
     if sensor in ("oakinkv2", "oakinkv2_arctic"):
         logger.info(f"Computing {sensor} pose normalization stats…")
-        if sensor == "oakinkv2_arctic":
-            pose_sequences = oi_train._sequences + ar_train._sequences
-        else:
-            pose_sequences = train_ds._sequences
-        all_pos = [seq.joint_data[..., :3].reshape(-1, 3) for seq in pose_sequences]
-        if all_pos:
-            pos_arr = np.concatenate(all_pos, axis=0)
-            pos_mean = np.mean(pos_arr, axis=0).tolist()
-            pos_std = [float(s) if s > 1e-6 else 1.0 for s in np.std(pos_arr, axis=0)]
-        else:
-            pos_mean = [0.0, 0.0, 0.0]
-            pos_std = [1.0, 1.0, 1.0]
+        # if sensor == "oakinkv2_arctic":
+        #     pose_sequences = oi_train._sequences + ar_train._sequences
+        # else:
+        #     pose_sequences = train_ds._sequences
+        # all_pos = [seq.joint_data[..., :3].reshape(-1, 3) for seq in pose_sequences]
+        # if all_pos:
+        #     pos_arr = np.concatenate(all_pos, axis=0)
+        #     pos_mean = np.mean(pos_arr, axis=0).tolist()
+        #     pos_std = [float(s) if s > 1e-6 else 1.0 for s in np.std(pos_arr, axis=0)]
+        # else:
+        pos_mean = [0.0, 0.0, 0.0]
+        pos_std = [0.01, 0.01, 0.01]
+            # pos_std = [1.0, 1.0, 1.0]
         logger.info(f"  pose     mean={pos_mean}  std={pos_std}")
         train_dset.pos_mean = pos_mean
         train_dset.pos_std = pos_std

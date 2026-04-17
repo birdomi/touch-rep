@@ -21,8 +21,8 @@ normalization:
 sensor: brainco_grasp
 train_val_split: 0.8
 
-window_time: 0.1
-window_overlap: 0.5
+window_time: 0.15
+window_overlap: 0.0
 interpolating_freq: 100
 
 dataset:

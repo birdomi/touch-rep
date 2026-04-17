@@ -139,6 +139,9 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
     pos_mean  = pose_flat.mean(dim=0)
     pos_std   = pose_flat.std(dim=0).clamp(min=1e-6)
 
+    # pos_mean  = torch.tensor([0.,0.,0.])  # Initialize with zeros
+    # pos_std   = torch.tensor([0.015, 0.015, 0.015])  # Initialize with small values
+
     lines.append(f"[NormStats] signal_mean (per ch): {sensor_mean_1d.tolist()}")
     lines.append(f"[NormStats] signal_std  (per ch): {sensor_std_1d.tolist()}")
     lines.append(f"[NormStats] pos_mean:             {pos_mean.tolist()}")

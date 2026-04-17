@@ -20,7 +20,7 @@ data:
   dataset:
     _target_: tactile_ssl.data.brainco_grasp_dataset.BraincoGraspDetectionDataset
     use_skeleton_poses: true
-    robot_to_human: false
+    robot_to_human: true
     retargeting_config_path_left: assets/brainco/revo2_left_hand.yml
     retargeting_config_path_right: assets/brainco/revo2_right_hand.yml
 task:

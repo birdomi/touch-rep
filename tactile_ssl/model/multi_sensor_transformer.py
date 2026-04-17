@@ -404,6 +404,7 @@ class MultiSensorTransformer(SignalTransformer):
         B, _, N, _ = pos.shape
         pos_xyz = pos[..., :3].clone()
         pos_xyz = (pos_xyz - self.pos_mean) / self.pos_std
+        # print(self.pos_mean, self.pos_std)
 
         return _apply_embed1d(pos_xyz, self.position_embed, B, N)
 

@@ -1,17 +1,20 @@
-"""test_visualization.py — BrainCo vs OakInkV2 visualization with identical pipeline.
+"""test_visualization_arctic.py — BrainCo vs Arctic vs OakInkV2 visualization.
 
-Both datasets go through the exact same post-processing and visualization code.
+All three datasets go through the exact same post-processing and visualization code.
 Row 0: BrainCo  (local hand frame)
-Row 1: OakInkV2 (local hand frame)
-Row 2: BrainCo  (global vroot frame — wrist pos + rotation axes)
-Row 3: OakInkV2 (global vroot frame — wrist pos + rotation axes)
+Row 1: Arctic   (local hand frame)
+Row 2: OakInkV2 (local hand frame)
+Row 3: BrainCo  (global vroot frame — wrist pos + rotation axes)
+Row 4: Arctic   (global vroot frame — wrist pos + rotation axes)
+Row 5: OakInkV2 (global vroot frame — wrist pos + rotation axes)
 
 Usage:
-    python test_visualization.py \
-        --brainco_ep   dataset/brainco/pretraining/doll/episode_0000 \
-        --brainco_urdf dataset/brainco/urdf \
-        --oakink_root  pretraining_dataset/OakInkv2 \
-        --out          vis/compare.png
+    python test_visualization_arctic.py \
+        --brainco_ep    dataset/brainco/pretraining/pot/episode_0000 \
+        --brainco_urdf  dataset/brainco/urdf \
+        --arctic_root   pretraining_dataset/Arctic \
+        --oakink_root   pretraining_dataset/OakInkv2 \
+        --out           vis/compare_arctic.png
 """
 import argparse
 import os
@@ -157,8 +160,9 @@ def extract_brainco(ep_path: str, urdf_path: str,
     )
 
 
-def extract_oakinkv2(data_root: str,
-                     seq_idx: int = -1, frame_idx: int = 0) -> dict:
+def _extract_from_pkl_dataset(data_root: str, seq_idx: int, frame_idx: int,
+                              label: str) -> dict:
+    """Shared extraction logic for pkl-based datasets (Arctic, OakInkV2)."""
     all_pkls = sorted(Path(data_root).glob("*.pkl"))
     assert all_pkls, f"No pkl files in {data_root}"
     pkl_idx = (len(all_pkls) // 2) if seq_idx < 0 else min(seq_idx, len(all_pkls) - 1)
@@ -166,13 +170,13 @@ def extract_oakinkv2(data_root: str,
     shutil.copy(all_pkls[pkl_idx], _tmp)
     dataset = OakInkV2TactileDataset(data_root=_tmp, window_size=3, split="train",
                                      train_val_split=1.0)
-    assert len(dataset) > 0, f"No OakInkV2 data in {data_root}"
+    assert len(dataset) > 0, f"No data in {data_root}"
 
-    idx       = frame_idx #len(dataset) // 2
+    idx       = frame_idx
     sample    = dataset[idx]
     frame_idx = min(frame_idx, sample["sensor"].shape[0] - 1)
     print(sample["sensor"].shape, frame_idx)
-    print(f"  OakInkV2: total_pkls={len(all_pkls)}, pkl_idx={pkl_idx}({all_pkls[pkl_idx].name}), window={idx}, frame_idx={frame_idx}")
+    print(f"  {label}: total_pkls={len(all_pkls)}, pkl_idx={pkl_idx}({all_pkls[pkl_idx].name}), window={idx}, frame_idx={frame_idx}")
 
     skeleton = sample["sensor_poses"][frame_idx].cpu().numpy()  # (42, 3) wrist-local
     wrist_p  = sample["wrist_poses"][frame_idx].cpu().numpy()   # (2, 9)
@@ -187,15 +191,23 @@ def extract_oakinkv2(data_root: str,
     fp_sizes_l = 20 + np.clip(tac[_MP_TIPS, 0], 0, None) * 200
     fp_sizes_r = 20 + np.clip(tac[[21 + t for t in _MP_TIPS], 0], 0, None) * 200
 
-    seq_idx, start = dataset.windows[idx]
+    w_seq_idx, start = dataset.windows[idx]
     return dict(
         sk_left=sk_left, sk_right=sk_right,
         fp_left=fp_left, fp_right=fp_right,
         fp_sizes_l=fp_sizes_l, fp_sizes_r=fp_sizes_r,
         wrist_poses=wrist_p,
         sk_lines=_MP_LINES,
-        info=f"OakInkV2  seq={seq_idx}  frame_start={start}",
+        info=f"{label}  seq={w_seq_idx}  frame_start={start}",
     )
+
+
+def extract_arctic(data_root: str, seq_idx: int = -1, frame_idx: int = 0) -> dict:
+    return _extract_from_pkl_dataset(data_root, seq_idx, frame_idx, label="Arctic")
+
+
+def extract_oakinkv2(data_root: str, seq_idx: int = -1, frame_idx: int = 0) -> dict:
+    return _extract_from_pkl_dataset(data_root, seq_idx, frame_idx, label="OakInkV2")
 
 
 # ── Shared visualization functions ────────────────────────────────────────────
@@ -369,7 +381,7 @@ def visualize_global(axes_3d, axes_2d, data: dict):
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
-def _render_and_save(bc, ok, out_path: str):
+def _render_and_save(bc, arctic, ok, out_path: str):
     bc_rgb, bc_rgb_src = _load_brainco_rgb(
         bc["ep_path"],
         abs_frame=int(bc["abs_frame"]),
@@ -381,10 +393,13 @@ def _render_and_save(bc, ok, out_path: str):
         print(f"  BrainCo RGB: loaded from {bc_rgb_src}")
 
     ncols = 5  # RGB + 3D + XY + XZ + YZ
-    nrows = 4  # local BC, local OK, global BC, global OK
+    nrows = 6  # local BC, local Arctic, local OK, global BC, global Arctic, global OK
 
     fig = plt.figure(figsize=(4.8 * ncols, 5.5 * nrows), constrained_layout=True)
-    fig.suptitle("BrainCo vs Arctic  —  Local (rows 0-1) / Global vroot (rows 2-3)", fontsize=11)
+    fig.suptitle(
+        "BrainCo / Arctic / OakInkV2  —  Local (rows 0-2) / Global vroot (rows 3-5)",
+        fontsize=11,
+    )
 
     def make_row(row, with_rgb: bool = False, rgb: Optional[np.ndarray] = None, rgb_title: str = "RGB"):
         if with_rgb:
@@ -406,10 +421,14 @@ def _render_and_save(bc, ok, out_path: str):
             ax.set_title(lbl)
         return ax3d, axs
 
+    # Local rows
     visualize_local(*make_row(0, with_rgb=True, rgb=bc_rgb, rgb_title=f"BrainCo RGB  f{bc['abs_frame']}"), bc)
-    visualize_local(*make_row(1), ok)
-    visualize_global(*make_row(2, with_rgb=True, rgb=bc_rgb, rgb_title=f"BrainCo RGB  f{bc['abs_frame']}"), bc)
-    visualize_global(*make_row(3), ok)
+    visualize_local(*make_row(1), arctic)
+    visualize_local(*make_row(2), ok)
+    # Global rows
+    visualize_global(*make_row(3, with_rgb=True, rgb=bc_rgb, rgb_title=f"BrainCo RGB  f{bc['abs_frame']}"), bc)
+    visualize_global(*make_row(4), arctic)
+    visualize_global(*make_row(5), ok)
 
     fig.savefig(out_path, dpi=130, bbox_inches="tight")
     plt.close(fig)
@@ -424,10 +443,13 @@ def main():
     parser.add_argument("--brainco_urdf",   default="dataset/brainco/urdf")
     parser.add_argument("--brainco_frame",  type=int, default=0, help="frame within window (-1=middle)")
     parser.add_argument("--frame_step",     type=int, default=100, help="sample index step for multi-frame output")
-    parser.add_argument("--oakink_root",    default="pretraining_dataset/Arctic")
-    parser.add_argument("--oakink_seq",     type=int, default=1, help="pkl file index (-1=middle)")
-    parser.add_argument("--oakink_frame",   type=int, default=0,  help="frame within window")
-    parser.add_argument("--out",            default="vis/compare.png")
+    parser.add_argument("--arctic_root",    default="pretraining_dataset/Arctic")
+    parser.add_argument("--arctic_seq",     type=int, default=1, help="Arctic pkl file index (-1=middle)")
+    parser.add_argument("--arctic_frame",   type=int, default=0,  help="Arctic frame within window")
+    parser.add_argument("--oakink_root",    default="pretraining_dataset/OakInkv2")
+    parser.add_argument("--oakink_seq",     type=int, default=0, help="OakInkV2 pkl file index (-1=middle)")
+    parser.add_argument("--oakink_frame",   type=int, default=0,  help="OakInkV2 frame within window")
+    parser.add_argument("--out",            default="vis/compare_arctic.png")
     args = parser.parse_args()
 
     out_path = Path(args.out)
@@ -448,6 +470,10 @@ def main():
     del _ds
     print(f"Total BrainCo samples: {total_samples}, step: {args.frame_step}")
 
+    print("Loading Arctic sample...")
+    arctic = extract_arctic(args.arctic_root,
+                            seq_idx=args.arctic_seq, frame_idx=args.arctic_frame)
+
     print("Loading OakInkV2 sample...")
     ok = extract_oakinkv2(args.oakink_root,
                           seq_idx=args.oakink_seq, frame_idx=args.oakink_frame)
@@ -460,7 +486,7 @@ def main():
         stem = out_path.stem
         suffix = out_path.suffix
         out_file = out_path.parent / f"{stem}_sample{sample_idx:04d}{suffix}"
-        _render_and_save(bc, ok, str(out_file))
+        _render_and_save(bc, arctic, ok, str(out_file))
 
 
 if __name__ == "__main__":

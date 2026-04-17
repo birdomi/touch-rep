@@ -35,17 +35,16 @@ task:
   xela_num_frames: 10
 
   model_encoder:
-    _target_: tactile_ssl.model.multi_sensor_brainco_tiny
+    _target_: tactile_ssl.model.multi_sensor_tiny
     in_dim: 10
     in_chans: 4
-    sequence_length: 1
-    time_chunk_size: 1
+    sequence_length: 3
+    time_chunk_size: 3
     pos_embed_fn: learned
     num_register_tokens: 1
-    with_masktoken: False
+    with_masktoken: false
     drop_path_rate: 0.0
     causal: False
-    xela_num_frames: 10
 
   model_task:
     _target_: tactile_ssl.downstream_task.AttentiveClassifier
@@ -60,22 +59,17 @@ task:
   train_encoder: false
   encoder_type: ${ssl_name}
 
-  # Partial fine-tuning: freeze encoder except listed submodules.
-  # Set to ~ to train all encoder params (full fine-tuning).
-  # Only effective when train_encoder=true.
   finetune_modules:
     - sensor_block
-    # - patch_embed
 
   optim_cfg:
     _partial_: True
     _target_: torch.optim.AdamW
-    lr: 3e-4
-    weight_decay: 1e-4
+    lr: 1e-4
+    weight_decay: 5e-4
 
-  scheduler_cfg:
-    _partial_: True
-    _target_: tactile_ssl.model.custom_scheduler.WarmupCosineScheduler
-    warmup_epochs: 5
-    start_lr: 1e-5
-    final_lr: 1e-6
+  # scheduler_cfg:
+  #   _partial_: True
+  #   _target_: tactile_ssl.model.custom_scheduler.CosineScheduler
+  #   start_lr: 1e-4
+  #   final_lr: 1e-6
