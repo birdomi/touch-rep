@@ -44,7 +44,7 @@ from .layers import init_weights_vit_timm
 
 log = get_pylogger(__name__)
 
-NUM_SENSORS = 2
+NUM_SENSORS = 1
 SENSOR_ID_BRAINCO = 0
 SENSOR_ID_XELA = 1
 
@@ -288,24 +288,24 @@ class MultiSensorTransformer(SignalTransformer):
         Returns:
             정규화된 텐서, 같은 shape
         """
-        if sensor_ids is None:
-            x = x.clone()
-            m = self.signal_mean[SENSOR_ID_BRAINCO]   # (4,)
-            s = self.signal_std[SENSOR_ID_BRAINCO]    # (4,)
-            x[..., :self.in_chans] = (x[..., :self.in_chans] - m) / s
-            return x
+        # if sensor_ids is None:
+        x = x.clone()
+        m = self.signal_mean[SENSOR_ID_BRAINCO]   # (4,)
+        s = self.signal_std[SENSOR_ID_BRAINCO]    # (4,)
+        x[..., :self.in_chans] = (x[..., :self.in_chans] - m) / s
+        return x
 
-        out = x.clone()
-        for sid in sensor_ids.unique().tolist():
-            mask = sensor_ids == sid
-            xi   = x[mask]
-            m    = self.signal_mean[sid]   # (4,)
-            s    = self.signal_std[sid]    # (4,)
+        # out = x.clone()
+        # for sid in sensor_ids.unique().tolist():
+        #     mask = sensor_ids == sid
+        #     xi   = x[mask]
+        #     m    = self.signal_mean[sid]   # (4,)
+        #     s    = self.signal_std[sid]    # (4,)
 
-            # BrainCo/XELA 모두 in_chans=4로 동일 처리
-            xi = xi.clone()
-            xi[..., :self.in_chans] = (xi[..., :self.in_chans] - m) / s
-            out[mask] = xi
+        #     # BrainCo/XELA 모두 in_chans=4로 동일 처리
+        #     xi = xi.clone()
+        #     xi[..., :self.in_chans] = (xi[..., :self.in_chans] - m) / s
+        #     out[mask] = xi
 
         return out
 
@@ -429,6 +429,7 @@ class MultiSensorTransformer(SignalTransformer):
         # if sensor_ids is None:
 
         sid = sensor_ids[0].item() if sensor_ids is not None else SENSOR_ID_BRAINCO
+        # print(sensor_ids, sid)
         for blk in self.sensor_block[sid]:
             x = blk(x, bias)
         return x
@@ -691,7 +692,8 @@ class MultiSensorTransformer(SignalTransformer):
             signal_mean/std: (NUM_SENSORS, in_chans)
             pos_mean/std:    (3,) — optional pose normalization stats
         """
-        assert signal_mean.shape == signal_std.shape == (NUM_SENSORS, self.in_chans)
+        # print(signal_mean.shape, signal_mean)
+        # assert signal_mean.shape == signal_std.shape == (NUM_SENSORS, self.in_chans)
         self.signal_mean = signal_mean
         self.signal_std  = signal_std
         if pos_mean is not None and pos_std is not None:

@@ -176,8 +176,20 @@ class BraincoTransformer(SignalTransformer):
 
         self.init_weights()
 
-    def update_stats(self, signal_mean, signal_std):
+    def update_stats(self, signal_mean, signal_std, pos_mean=None, pos_std=None):
         assert isinstance(signal_mean, torch.Tensor) and isinstance(signal_std, torch.Tensor)
+
+        if pos_mean is not None and pos_std is not None:
+            assert isinstance(pos_mean, torch.Tensor) and isinstance(pos_std, torch.Tensor)
+            signal_mean = signal_mean.reshape(-1)
+            signal_std = signal_std.reshape(-1)
+            pos_mean = pos_mean.reshape(-1)
+            pos_std = pos_std.reshape(-1)
+
+            if signal_mean.shape[-1] + pos_mean.shape[-1] == self.in_chans:
+                signal_mean = torch.cat([signal_mean, pos_mean], dim=0)
+                signal_std = torch.cat([signal_std, pos_std], dim=0)
+
         assert signal_mean.shape[-1] == signal_std.shape[-1] == self.in_chans
         self.signal_mean = signal_mean
         self.signal_std = signal_std
@@ -192,6 +204,7 @@ class BraincoTransformer(SignalTransformer):
             else:
                 # General case: per-channel normalization, broadcast over last dim
                 x = (x - self.signal_mean) / self.signal_std
+                # print(self.signal_mean, self.signal_std)
 
         return x
 

@@ -119,23 +119,31 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
 
     # ── Compute normalization stats from train windows ────────────────────
     lines.append("Computing normalization stats from training data ...")
-    all_sensor = torch.stack([dataset.windows[i]["sensor"] for i in train_indices])      # (N, W, 10, 4)
-    all_poses  = torch.stack([dataset.windows[i]["sensor_poses"] for i in train_indices])  # (N, W, 10, 3)
+    all_sensor = torch.stack([dataset.windows[i]["sensor"] for i in train_indices])
+    all_poses  = torch.stack([dataset.windows[i]["sensor_poses"] for i in train_indices])
 
-    NUM_SENSOR_TYPES = 2  # MultiSensorTransformer expects (NUM_SENSORS, in_chans)
-    NUM_CHANS = all_sensor.shape[-1]
+    is_cat_encoder = "brainco_cat" in str(cfg.task.model_encoder._target_)
+    signal_source = all_sensor
+    pose_source = all_poses
+
+    NUM_CHANS = signal_source.shape[-1]
     sensor_mean_1d = torch.zeros(NUM_CHANS)
     sensor_std_1d  = torch.ones(NUM_CHANS)
     for c in range(NUM_CHANS):
-        valid = all_sensor[..., c][all_sensor[..., c] >= 0].float()
+        valid = signal_source[..., c][signal_source[..., c] >= 0].float()
         if valid.numel() > 0:
             sensor_mean_1d[c] = valid.mean()
             sensor_std_1d[c]  = valid.std().clamp(min=1e-6)
 
-    signal_mean = sensor_mean_1d.unsqueeze(0).expand(NUM_SENSOR_TYPES, -1).clone()
-    signal_std  = sensor_std_1d.unsqueeze(0).expand(NUM_SENSOR_TYPES, -1).clone()
+    if is_cat_encoder:
+        signal_mean = sensor_mean_1d.clone()
+        signal_std = sensor_std_1d.clone()
+    else:
+        NUM_SENSOR_TYPES = 1 # MultiSensorTransformer expects (NUM_SENSORS, in_chans)
+        signal_mean = sensor_mean_1d.unsqueeze(0).expand(NUM_SENSOR_TYPES, -1).clone()
+        signal_std  = sensor_std_1d.unsqueeze(0).expand(NUM_SENSOR_TYPES, -1).clone()
 
-    pose_flat = all_poses.reshape(-1, 3).float()
+    pose_flat = pose_source.reshape(-1, 3).float()
     pos_mean  = pose_flat.mean(dim=0)
     pos_std   = pose_flat.std(dim=0).clamp(min=1e-6)
 

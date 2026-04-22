@@ -9,6 +9,14 @@ from .force_sl import (
 )  # noqa F401
 from .d360_sl import D360SLModule
 from .classification_sl import D360ClassificationSLModule
+
 from .brainco_grasp_sl import BraincoGraspDetectionSLModule
-from .brainco_grasp_fusion_sl import BraincoGraspFusionSLModule
+
+try:
+    from .brainco_grasp_fusion_sl import BraincoGraspFusionSLModule
+except Exception:
+    pass
+
 from .multi_sensor_grasp_sl import MultiSensorGraspDetectionSLModule
+
+from .brainco_cat_grasp_sl import BraincoCatGraspDetectionSLModule

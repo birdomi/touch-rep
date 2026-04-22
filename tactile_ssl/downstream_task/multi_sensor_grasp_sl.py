@@ -124,7 +124,7 @@ class MultiSensorGraspDetectionSLModule(BraincoGraspDetectionSLModule):
         #     sensor_input = F.pad(sensor_input, (0, self._max_channels - C))
 
         # All samples are BrainCo (sensor_id=0)
-        sensor_ids = torch.ones(B * G, dtype=torch.long, device=sensor.device)
+        sensor_ids = torch.zeros(B * G, dtype=torch.long, device=sensor.device)
 
         with torch.no_grad() if not self.train_encoder else torch.enable_grad():
             self.model_encoder.eval()

@@ -1,22 +1,22 @@
 # @package _global_
 
 defaults:
-  - override /data: arctic
+  - override /data: gigahands_oakinkv2
   - override /algorithm: gigahands_dinov2
   - _self_
 
 model_size: tiny
-experiment_name: dinov2_arctic_${model_size}
+experiment_name: dinov2_gigahands_oakinkv2_${model_size}
 ckpt_path: ./
 
 wandb:
   entity: ryk9012-gwangju-institute-of-science-and-technology
-  project: dinov2
-  group: dino_oakinkv2_${model_size}
+  project: gigahands_dinov2
+  group: dino_gigahands_oakinkv2_${model_size}
   tags: ["gigahands", "oakinkv2", "${model_size}"]
 
 trainer:
-  max_epochs: 300
+  max_epochs: 100
   validation_frequency: 50
 
 algorithm:

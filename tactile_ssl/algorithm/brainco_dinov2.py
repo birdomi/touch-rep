@@ -30,6 +30,11 @@ class BraincoDINOv2Module(DINOv2Module):
         self.ibot_mask_ratio = ibot_mask_ratio
         self.use_random_mask = use_random_mask
 
+    @staticmethod
+    def _empty_pos_like(x: torch.Tensor) -> torch.Tensor:
+        """BrainCo cat pretraining uses only sensor channels; pos stream stays empty."""
+        return x.new_zeros(*x.shape[:-1], 0)
+
     def on_validation_batch_end(self, outputs: Dict, batch: Dict, batch_idx: int, trainer_instance=None):
         self.log_on_batch_end(outputs, stage="val", trainer_instance=trainer_instance)
         # Plot online probe predictions
@@ -55,11 +60,11 @@ class BraincoDINOv2Module(DINOv2Module):
                         n=encoder.in_dim,
                     )
                     # in_dims corresponds to num sensors
-                    l = 4
+                    l = encoder.in_chans
                     X_pred = einops.rearrange(X_pred, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=l)
                     X_orig = einops.rearrange(X_orig, "b t n (c l) -> b t n c l", n=encoder.in_dim, l=l)
-                    X_pred = X_pred[0].cpu().numpy()[..., 0, :3]
-                    X_orig = X_orig[0].cpu().numpy()[..., 0, :3]
+                    X_pred = X_pred[0].cpu().numpy()[..., 0, : min(3, l)]
+                    X_orig = X_orig[0].cpu().numpy()[..., 0, : min(3, l)]
                     signal_mean = self.teacher_encoder_dict["backbone"].signal_mean.detach().cpu().numpy()
                     signal_std = self.teacher_encoder_dict["backbone"].signal_std.detach().cpu().numpy()
                     # X_pred = xela_sensor_layout(X_pred, signal_mean, signal_std)
@@ -137,12 +142,12 @@ class BraincoDINOv2Module(DINOv2Module):
     def forward(
         self,
         xs: torch.Tensor,
-        pos: torch.Tensor,
         global_masks: torch.Tensor,
         local_masks: torch.Tensor,
         ibot_masks: torch.Tensor,
     ):
         assert global_masks is not None and local_masks is not None, "Masks are required for DINOModule during training"
+        pos = self._empty_pos_like(xs)
 
         ibot_masks_flat = ibot_masks.flatten(0, 1)
         ibot_mask_indices = torch.nonzero(ibot_masks_flat).flatten()
@@ -290,11 +295,9 @@ class BraincoDINOv2Module(DINOv2Module):
         self.step = self.step + 1
         self.generator.manual_seed(self.step)
         x = batch["sensor"]
-        pos = batch["sensor_poses"]
-        # print(x.shape, pos.shape)
         global_masks, local_masks, ibot_masks = self.sample_masks(x)
 
-        loss = self.forward(x, pos, global_masks, local_masks, ibot_masks)
+        loss = self.forward(x, global_masks, local_masks, ibot_masks)
 
         output = {
             "ssl_loss": loss.item(),
@@ -305,7 +308,9 @@ class BraincoDINOv2Module(DINOv2Module):
         cls_embedding = None
         if len(self.online_probes) > 0:
             with torch.no_grad():
-                teacher_dict = self.teacher_encoder_dict["backbone"].forward_features(x, pos)
+                teacher_dict = self.teacher_encoder_dict["backbone"].forward_features(
+                    x, self._empty_pos_like(x)
+                )
                 cls_embedding = teacher_dict["x_norm_regtokens"].squeeze(1)
                 embedding = teacher_dict["x_norm_patchtokens"]
                 embedding = F.layer_norm(embedding, (embedding.size(-1),))

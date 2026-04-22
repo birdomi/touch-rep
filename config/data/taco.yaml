@@ -1,0 +1,26 @@
+train_dataloader:
+  batch_size: 128
+  num_workers: 8
+  shuffle: true
+  drop_last: true
+  pin_memory: true
+  persistent_workers: true
+
+val_dataloader:
+  batch_size: 128
+  num_workers: 8
+  shuffle: false
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+normalization:
+  mean: null   # populated at runtime by the dataloader setup
+  std: null
+
+sensor: taco
+
+data_root: pretraining_dataset/TACO
+window_size: 3
+window_stride: 3
+train_val_split: 1.0

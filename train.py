@@ -111,8 +111,9 @@ def _maybe_update_encoder_stats(algorithm, sensor_means, sensor_stds, pos_mean=N
         if pos_mean is not None and pos_std is not None:
             kwargs["pos_mean"] = torch.tensor(pos_mean, dtype=torch.float32)
             kwargs["pos_std"] = torch.tensor(pos_std, dtype=torch.float32)
-
         if kwargs:
+            print(kwargs)
+
             module.update_stats(**kwargs)
             logger.info(f"Called update_stats() on {name}")
 
@@ -697,7 +698,7 @@ def get_dataloaders_gigahands_based(cfg: DictConfig):
         val_datasets   = [oi_val,   ar_val]
     else:
         # ── Single dataset ──────────────────────────────────────────────────
-        dataset_cls = OakInkV2TactileDataset if sensor == "oakinkv2" else GigaHandsTactileDataset
+        dataset_cls = OakInkV2TactileDataset if sensor in ("oakinkv2", "taco") else GigaHandsTactileDataset
         common_kwargs = dict(
             data_root=data_cfg.data_root,
             window_size=window_size, window_stride=window_stride,
@@ -738,18 +739,18 @@ def get_dataloaders_gigahands_based(cfg: DictConfig):
     # ── Compute pose normalization stats for OakInkV2 wrist-local poses ─────
     if sensor in ("oakinkv2", "oakinkv2_arctic"):
         logger.info(f"Computing {sensor} pose normalization stats…")
-        # if sensor == "oakinkv2_arctic":
-        #     pose_sequences = oi_train._sequences + ar_train._sequences
-        # else:
-        #     pose_sequences = train_ds._sequences
-        # all_pos = [seq.joint_data[..., :3].reshape(-1, 3) for seq in pose_sequences]
-        # if all_pos:
-        #     pos_arr = np.concatenate(all_pos, axis=0)
-        #     pos_mean = np.mean(pos_arr, axis=0).tolist()
-        #     pos_std = [float(s) if s > 1e-6 else 1.0 for s in np.std(pos_arr, axis=0)]
-        # else:
-        pos_mean = [0.0, 0.0, 0.0]
-        pos_std = [0.01, 0.01, 0.01]
+        if sensor == "oakinkv2_arctic":
+            pose_sequences = oi_train._sequences + ar_train._sequences
+        else:
+            pose_sequences = train_ds._sequences
+        all_pos = [seq.joint_data[..., :3].reshape(-1, 3) for seq in pose_sequences]
+        if all_pos:
+            pos_arr = np.concatenate(all_pos, axis=0)
+            pos_mean = np.mean(pos_arr, axis=0).tolist()
+            pos_std = [float(s) if s > 1e-6 else 1.0 for s in np.std(pos_arr, axis=0)]
+        else:
+            pos_mean = [0.0, 0.0, 0.0]
+            pos_std = [0.01, 0.01, 0.01]
             # pos_std = [1.0, 1.0, 1.0]
         logger.info(f"  pose     mean={pos_mean}  std={pos_std}")
         train_dset.pos_mean = pos_mean
@@ -831,24 +832,39 @@ def get_dataloaders_brainco_based(cfg: DictConfig):
     # Pre-calculated or dummy stats for brainco
     mean = [0.0] * 4
     std = [1.0] * 4
-    
-    # Calculate BrainCo dataset statistics
+
+    # Calculate BrainCo dataset statistics from actual sensor tensors.
+    # This supports both:
+    #   - BraincoSSLDataset / tactile_array      -> sensor[..., 4]
+    #   - BraincoGraspDetectionWorldDataset      -> sensor[..., 7]
     print("Calculating Brainco dataset statistics...")
-    all_data = []
-    if hasattr(train_dset, "datasets"):
-        # ConcatDataset
-        for ds in train_dset.datasets:
-            if hasattr(ds, "tactile_array"):
-                all_data.append(ds.tactile_array)
-    elif hasattr(train_dset, "tactile_array"):
-        all_data.append(train_dset.tactile_array)
-        
-    if all_data:
-        all_data_np = np.concatenate(all_data, axis=0) # shape (Total_N, num_sensors, channels)
-        calc_mean = np.mean(all_data_np, axis=(0, 1)).tolist()
-        calc_std = np.std(all_data_np, axis=(0, 1)).tolist()
+    sensor_windows = []
+    src_datasets = train_dset.datasets if hasattr(train_dset, "datasets") else [train_dset]
+    for ds in src_datasets:
+        inner = ds.dataset if hasattr(ds, "dataset") else ds
+        if hasattr(inner, "windows") and len(inner.windows) > 0:
+            sensor_windows.extend([w["sensor"].cpu().numpy() for w in inner.windows])
+        elif hasattr(inner, "tactile_array"):
+            sensor_windows.append(inner.tactile_array.astype(np.float32))
+
+    if sensor_windows:
+        all_data_np = np.concatenate(sensor_windows, axis=0)  # (Total_T, num_sensors, channels)
+        num_chans = all_data_np.shape[-1]
+        calc_mean = []
+        calc_std = []
+        for c in range(num_chans):
+            ch = all_data_np[..., c].astype(np.float32)
+            # BrainCo tactile channel-2 uses -1 as invalid sentinel.
+            valid = ch[ch >= 0] if c == 2 else ch.reshape(-1)
+            if valid.size == 0:
+                calc_mean.append(0.0)
+                calc_std.append(1.0)
+            else:
+                calc_mean.append(float(valid.mean()))
+                calc_std.append(float(max(valid.std(), 1e-6)))
+
         mean = calc_mean
-        std = [s if s > 1e-6 else 1.0 for s in calc_std]
+        std = calc_std
         print(f"Calculated mean: {mean}")
         print(f"Calculated std: {std}")
     else:
@@ -868,26 +884,28 @@ def get_dataloaders_brainco_based(cfg: DictConfig):
         val_dset.sensor_mean = mean
         val_dset.sensor_std = std
 
-    # Compute pose normalization stats from fingertip_rel (N, 10, 3)
-    all_pos = []
-    src_datasets = train_dset.datasets if hasattr(train_dset, "datasets") else [train_dset]
-    for ds in src_datasets:
-        inner = ds.dataset if hasattr(ds, "dataset") else ds
-        if hasattr(inner, "fingertip_rel"):
-            all_pos.append(inner.fingertip_rel.reshape(-1, 3).astype(np.float32))
-    if all_pos:
-        pos_arr = np.concatenate(all_pos, axis=0)
-        pos_mean = np.mean(pos_arr, axis=0).tolist()
-        pos_std  = [float(s) if s > 1e-6 else 1.0 for s in np.std(pos_arr, axis=0)]
-    else:
-        pos_mean = [0.0, 0.0, 0.0]
-        pos_std  = [1.0, 1.0, 1.0]
-    logger.info(f"BrainCo pose mean: {pos_mean}  std: {pos_std}")
-    train_dset.pos_mean = pos_mean
-    train_dset.pos_std  = pos_std
-    if val_dset:
-        val_dset.pos_mean = pos_mean
-        val_dset.pos_std  = pos_std
+    # Compute pose normalization stats from fingertip world/local positions when available
+    # all_pos = []
+    # src_datasets = train_dset.datasets if hasattr(train_dset, "datasets") else [train_dset]
+    # for ds in src_datasets:
+    #     inner = ds.dataset if hasattr(ds, "dataset") else ds
+    #     if hasattr(inner, "windows") and len(inner.windows) > 0 and "sensor_poses" in inner.windows[0]:
+    #         all_pos.extend([w["sensor_poses"].cpu().numpy().reshape(-1, 3) for w in inner.windows])
+    #     elif hasattr(inner, "fingertip_rel"):
+    #         all_pos.append(inner.fingertip_rel.reshape(-1, 3).astype(np.float32))
+    # if all_pos:
+    #     pos_arr = np.concatenate(all_pos, axis=0)
+    #     pos_mean = np.mean(pos_arr, axis=0).tolist()
+    #     pos_std  = [float(s) if s > 1e-6 else 1.0 for s in np.std(pos_arr, axis=0)]
+    # else:
+    #     pos_mean = [0.0, 0.0, 0.0]
+    #     pos_std  = [1.0, 1.0, 1.0]
+    # logger.info(f"BrainCo pose mean: {pos_mean}  std: {pos_std}")
+    # train_dset.pos_mean = pos_mean
+    # train_dset.pos_std  = pos_std
+    # if val_dset:
+    #     val_dset.pos_mean = pos_mean
+    #     val_dset.pos_std  = pos_std
 
     return train_dset, val_dset
 
@@ -1108,7 +1126,7 @@ def get_dataloaders(cfg: DictConfig):
         train_dset, val_dset = get_dataloaders_gelsight_based(cfg)
     elif cfg.data.sensor == "actionsense":
         train_dset, val_dset = get_dataloaders_actionsense_based(cfg)
-    elif cfg.data.sensor in ["gigahands", "oakinkv2", "gigahands_oakinkv2", "oakinkv2_arctic"]:
+    elif cfg.data.sensor in ["gigahands", "oakinkv2", "gigahands_oakinkv2", "oakinkv2_arctic", "taco"]:
         train_dset, val_dset = get_dataloaders_gigahands_based(cfg)
         sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
     elif cfg.data.sensor == "brainco":
@@ -1196,7 +1214,8 @@ def train(cfg: DictConfig):
     train_dset = train_dataloader.dataset
     pos_mean = getattr(train_dset, "pos_mean", None)
     pos_std  = getattr(train_dset, "pos_std",  None)
-    if pos_mean is not None and pos_std is not None:
+    is_brainco_cat = "brainco_cat" in str(cfg.algorithm.encoder._target_)
+    if (not is_brainco_cat) and pos_mean is not None and pos_std is not None:
         with open_dict(cfg):
             cfg.algorithm.encoder.pos_normalization = {"mean": pos_mean, "std": pos_std}
 
@@ -1204,6 +1223,11 @@ def train(cfg: DictConfig):
 
     logger.info(f"Instantiating algorithm <{cfg.algorithm._target_}>")
     algorithm = hydra.utils.instantiate(cfg.algorithm)
+
+    if is_brainco_cat:
+        _maybe_update_encoder_stats(algorithm, sensor_means, sensor_stds)
+    else:
+        _maybe_update_encoder_stats(algorithm, sensor_means, sensor_stds, pos_mean, pos_std)
 
     trainer.fit(algorithm, train_dataloader, val_dataloader, ckpt_path=cfg.ckpt_path)
 

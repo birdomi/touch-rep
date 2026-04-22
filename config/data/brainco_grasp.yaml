@@ -1,5 +1,5 @@
 train_dataloader:
-  batch_size: 64
+  batch_size: 32
   num_workers: 4
   shuffle: True
   drop_last: True
@@ -7,7 +7,7 @@ train_dataloader:
   persistent_workers: True
 
 val_dataloader:
-  batch_size: 64
+  batch_size: 32
   num_workers: 4
   shuffle: False
   drop_last: False

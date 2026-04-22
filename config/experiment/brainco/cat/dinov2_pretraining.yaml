@@ -1,0 +1,58 @@
+# @package _global_
+
+defaults:
+  - override /data: brainco
+  - override /algorithm: brainco_dinov2
+  - _self_
+
+model_size: tiny
+experiment_name: dinov2_brainco_cat_pretraining_${model_size}
+ckpt_path: ./
+
+wandb:
+  entity: ryk9012-gwangju-institute-of-science-and-technology
+  project: brainco_pretraining
+  group: dino_brainco_cat_pretraining_${model_size}
+  tags: ["brainco", "pretraining", "cat", "${model_size}"]
+
+trainer:
+  max_epochs: 500
+  validation_frequency: 50
+
+data:
+  sensor: brainco
+  train_val_split: 0.9
+  dataset_list: []
+  normalization: ~
+  dataset:
+    _target_: tactile_ssl.data.brainco_grasp_dataset_world.BraincoGraspDetectionWorldDataset
+    config:
+      window_time: ${data.window_time}
+      window_overlap: ${data.window_overlap}
+      interpolating_freq: ${data.interpolating_freq}
+      subtract_baseline: False
+      smooth_data: False
+      bias_noise_std: 0
+      bias_range: 0
+      pose_type: fingertip
+    data_path: ./pretraining_dataset/brainco/
+    brainco_urdf_path: ./dataset/brainco/urdf/
+
+algorithm:
+  _target_: tactile_ssl.algorithm.BraincoDINOv2Module
+  centering: centering
+  encoder:
+    _target_: tactile_ssl.model.brainco_cat_tiny
+    in_dim: 10
+    in_chans: 7   # tactile(4) + world xyz(3), sensor-only input
+    sequence_length: 3
+    time_chunk_size: 3
+    pos_embed_fn: learned
+    num_register_tokens: 1
+    with_masktoken: True
+    drop_path_rate: 0.3
+    drop_path_uniform: True
+    normalization: ${data.normalization}
+    causal: False
+  online_probes: []
+  online_probes_lrs: []

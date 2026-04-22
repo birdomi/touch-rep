@@ -1,0 +1,43 @@
+# @package _global_
+defaults:
+  - override /data: brainco_grasp_prediction
+  - override /task: brainco_grasp_prediction
+  - _self_
+
+ssl_name: dinov2
+sensor: brainco
+experiment_name: grasp_prediction_cat_scratch
+ckpt_path: ./
+
+resume_id: ~
+train_data_budget: 1.0
+val_data_budget: 1.0
+
+fold: 0       # 0-indexed fold to use as validation set
+num_folds: 4  # 5-fold → 80% train / 20% val by episode
+
+task:
+  _target_: tactile_ssl.downstream_task.BraincoCatGraspDetectionSLModule
+
+  checkpoint_encoder: ~
+  checkpoint_task: ~
+  train_encoder: true
+
+  model_encoder:
+    _target_: tactile_ssl.model.brainco_cat_tiny
+    in_chans: 7
+
+data:
+  dataset:
+    _target_: tactile_ssl.data.brainco_grasp_dataset_world.BraincoGraspDetectionWorldDataset
+    config:
+      window_time: ${data.window_time}
+      window_overlap: ${data.window_overlap}
+      interpolating_freq: ${data.interpolating_freq}
+      subtract_baseline: False
+      smooth_data: False
+      bias_noise_std: 0
+      bias_range: 0
+      pose_type: fingertip
+    data_path: ${paths.data_root}/brainco/downstream/grasp_prediction
+    brainco_urdf_path: ${paths.data_root}/brainco/urdf/

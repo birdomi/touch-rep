@@ -20,7 +20,7 @@ normalization:
 object_classes: null
 object_class_weights: null
 
-window_time: 0.01 # default 0.01 
+window_time: 0.03 # default 0.01 
 window_overlap: 0.0
 interpolating_freq: 100
 
