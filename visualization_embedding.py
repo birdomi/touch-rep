@@ -3,11 +3,12 @@
 visualization_embedding.py
 
 Standalone script to visualize per-window register-token embeddings
-from a trained MultiSensorTransformer using t-SNE.
+from a trained MultiSensorTransformer using UMAP.
 
 Supports two dataset types:
   brainco   — BraincoGraspDetectionDataset (grasp_success / grasp_fail episodes)
   oakinkv2  — OakInkV2TactileDataset       (pretraining sequences, no labels)
+  taco      — TACO .pkl sequences via OakInkV2TactileDataset-compatible loader
 
 For each episode/sequence:
   - Each window → one embedding (register token, averaged over temporal chunks)
@@ -25,6 +26,14 @@ Usage:
         --checkpoint checkpoints/epoch-0210.ckpt \
         --data_path pretraining_dataset/OakInkv2 \
         --dataset_type oakinkv2 \
+        --window_size 3 --window_stride 30 \
+        --num_sequences 20
+
+    # TACO pretraining dataset
+    python visualization_embedding.py \
+        --checkpoint checkpoints/epoch-0210.ckpt \
+        --data_path pretraining_dataset/TACO \
+        --dataset_type taco \
         --window_size 3 --window_stride 30 \
         --num_sequences 20
 """
@@ -56,7 +65,7 @@ from tactile_ssl.data.oakinkv2_tactile import OakInkV2TactileDataset
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="t-SNE visualization of MultiSensorTransformer register-token embeddings"
+        description="UMAP visualization of MultiSensorTransformer register-token embeddings"
     )
 
     # Required
@@ -64,12 +73,12 @@ def parse_args() -> argparse.Namespace:
                    help="Path to encoder checkpoint (.ckpt / .pt)")
     p.add_argument("--data_path", required=True,
                    help="Dataset root (grasp_success/grasp_fail for brainco; "
-                        "OakInkv2 pkl dir for oakinkv2)")
+                        "OakInkv2/TACO pkl dir for oakinkv2/taco)")
 
     # Dataset type
-    p.add_argument("--dataset_type", default="brainco",
-                   choices=["brainco", "oakinkv2"],
-                   help="Dataset to visualize (default: brainco)")
+    p.add_argument("--dataset_type", default="auto",
+                   choices=["auto", "brainco", "oakinkv2", "taco"],
+                   help="Dataset to visualize (default: auto)")
 
     # Output
     p.add_argument("--output", default="embedding_tsne.png",
@@ -82,8 +91,8 @@ def parse_args() -> argparse.Namespace:
                    help="Encoder time_chunk_size (default: 3)")
     p.add_argument("--in_dim",          type=int, default=42,
                    help="Number of joints/sensors for the encoder (default: 42)")
-    p.add_argument("--in_chans",        type=int, default=4,
-                   help="Sensor channels expected by the encoder (default: 4)")
+    p.add_argument("--in_chans",        type=int, default=1,
+                   help="Sensor channels expected by the encoder (default: 1)")
 
     # ── BrainCo-specific ──────────────────────────────────────────────────────
     p.add_argument("--urdf_path", default="dataset/brainco/urdf",
@@ -92,24 +101,24 @@ def parse_args() -> argparse.Namespace:
                    help="[brainco] Use 42-joint skeleton poses instead of 10 fingertip poses")
     p.add_argument("--window_time",    type=float, default=0.1,
                    help="[brainco] Window duration in seconds (default: 0.1)")
-    p.add_argument("--window_overlap", type=float, default=0.5,
-                   help="[brainco] Window overlap ratio (default: 0.5)")
+    p.add_argument("--window_overlap", type=float, default=0.0,
+                   help="[brainco] Window overlap ratio (default: 0.0)")
     p.add_argument("--num_episodes", type=int, default=None,
                    help="[brainco] Number of episodes to visualize (default: all)")
     p.add_argument("--max_episodes_per_class", type=int, default=None,
                    help="[brainco] Cap episodes per class independently")
 
-    # ── OakInkV2-specific ─────────────────────────────────────────────────────
+    # ── OakInkV2/TACO-specific ───────────────────────────────────────────────
     p.add_argument("--window_size",   type=int, default=3,
-                   help="[oakinkv2] Frames per window (default: 3)")
-    p.add_argument("--window_stride", type=int, default=30,
-                   help="[oakinkv2] Stride between windows (default: 30 — sparse sampling)")
+                   help="[oakinkv2/taco] Frames per window (default: 3)")
+    p.add_argument("--window_stride", type=int, default=3,
+                   help="[oakinkv2/taco] Stride between windows (default: 3)")
     p.add_argument("--split",         default="train", choices=["train", "val"],
-                   help="[oakinkv2] Dataset split (default: train)")
+                   help="[oakinkv2/taco] Dataset split (default: train)")
     p.add_argument("--scenes",        nargs="*", default=None,
                    help="[oakinkv2] Scene filter, e.g. --scenes scene_01 scene_02")
     p.add_argument("--num_sequences", type=int, default=None,
-                   help="[oakinkv2] Number of sequences to visualize (default: all)")
+                   help="[oakinkv2/taco] Number of sequences to visualize (default: all)")
 
     # UMAP hyper-parameters
     p.add_argument("--n_neighbors", type=int,   default=15,
@@ -183,6 +192,25 @@ def _run_encoder(
         sensor_ids=sensor_ids,
     )
     return out["x_norm_regtokens"][:, 0, :]   # (B, D)
+
+
+def infer_dataset_type(dataset_type: str, data_path: str) -> str:
+    """Infer the dataset type from the path when the user requests auto mode."""
+    if dataset_type != "auto":
+        return dataset_type
+
+    path_lower = str(Path(data_path)).lower()
+    if "taco" in path_lower:
+        return "taco"
+    if "oakink" in path_lower:
+        return "oakinkv2"
+    return "brainco"
+
+
+def shorten_seq_name(name: str, max_len: int = 18) -> str:
+    """Keep sequence labels readable on the plot."""
+    stem = Path(name).stem
+    return stem[:max_len]
 
 
 @torch.no_grad()
@@ -309,6 +337,13 @@ def extract_embeddings_brainco(
 
         print(f"  episode {ep_idx:3d} | label={label} | windows={n_wins} | path={Path(ep_path).name}")
 
+    if not all_embeddings:
+        raise ValueError(
+            "No BrainCo embeddings were extracted. "
+            "Check that --data_path points to a grasp dataset with "
+            "'grasp_success/' and 'grasp_fail/' episode folders."
+        )
+
     embeddings_np = torch.cat(all_embeddings, dim=0).float().numpy()
     return embeddings_np, all_metadata
 
@@ -412,6 +447,8 @@ def extract_embeddings_oakinkv2(
         all_embeddings.append(ep_emb)
 
         n_wins = ep_emb.shape[0]
+        seq_name = Path(dataset._seq_paths[seq_idx]).name
+        seq_name_short = shorten_seq_name(seq_name)
         for w_idx in range(n_wins):
             all_metadata.append({
                 "episode_idx": ep_i,
@@ -419,10 +456,17 @@ def extract_embeddings_oakinkv2(
                 "num_windows": n_wins,
                 "window_size": dataset.window_size,
                 "label":       -1,       # OakInkV2 has no grasp label
+                "seq_name":    seq_name,
+                "seq_name_short": seq_name_short,
             })
 
-        seq_name = Path(dataset._seq_paths[seq_idx]).name
         print(f"  seq {ep_i:3d} (seq_idx={seq_idx}) | windows={n_wins} | {seq_name}")
+
+    if not all_embeddings:
+        raise ValueError(
+            "No sequence embeddings were extracted. "
+            "Check that --data_path contains compatible .pkl files."
+        )
 
     embeddings_np = torch.cat(all_embeddings, dim=0).float().numpy()
     return embeddings_np, all_metadata
@@ -493,6 +537,20 @@ def plot_umap(
             coords[mask[-1], 0], coords[mask[-1], 1],
             c="black", s=55, marker="s", zorder=6,
         )
+
+        seq_label = metadata[mask[0]].get("seq_name_short")
+        if seq_label:
+            ax_order.annotate(
+                seq_label,
+                xy=(coords[mask[0], 0], coords[mask[0], 1]),
+                xytext=(4, 4),
+                textcoords="offset points",
+                fontsize=6,
+                color="black",
+                ha="left",
+                va="bottom",
+                zorder=11,
+            )
 
     # ── 100 window마다 실제 프레임 번호(window_idx * window_size)를 레이블 표시 ──
     for i, m in enumerate(metadata):
@@ -565,6 +623,7 @@ def plot_umap(
 
 def main():
     args = parse_args()
+    dataset_type = infer_dataset_type(args.dataset_type, args.data_path)
 
     # ── build encoder ─────────────────────────────────────────────────────────
     print(f"\nBuilding MultiSensorTransformer (tiny)  "
@@ -580,7 +639,7 @@ def main():
     model.eval()
 
     # ── build dataset + extract embeddings ───────────────────────────────────
-    if args.dataset_type == "brainco":
+    if dataset_type == "brainco":
         data_cfg = OmegaConf.create({
             "window_time":        args.window_time,
             "window_overlap":     args.window_overlap,
@@ -606,8 +665,9 @@ def main():
             device=args.device,
         )
 
-    else:  # oakinkv2
-        print(f"\nLoading OakInkV2 dataset from {args.data_path} ...")
+    else:  # oakinkv2 / taco
+        dataset_name = "TACO" if dataset_type == "taco" else "OakInkV2"
+        print(f"\nLoading {dataset_name} dataset from {args.data_path} ...")
         dataset = OakInkV2TactileDataset(
             data_root=args.data_path,
             window_size=args.window_size,

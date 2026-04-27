@@ -465,6 +465,7 @@ class BraincoSSLDataset(data.Dataset):
         sample = {
             "sensor":       sensor,
             "sensor_poses": sensor_poses,
+            "sensor_id": torch.tensor([0]),
             "fingertip_poses": fingertip_poses,
             "skeleton_poses": skeleton_poses,
             "wrist_poses":  wrist_poses,

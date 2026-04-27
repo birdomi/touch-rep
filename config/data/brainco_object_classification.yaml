@@ -18,15 +18,15 @@ normalization:
   mean: null
   std: null
 
-sensor: brainco_grasp_prediction
+sensor: brainco_object_classification
 train_val_split: 0.8
 
-window_time: 0.3
+window_time: 0.6
 window_overlap: 0.0
 interpolating_freq: 100
 
 dataset:
-  _target_: tactile_ssl.data.brainco_grasp_dataset.BraincoGraspDetectionDataset
+  _target_: tactile_ssl.data.brainco_object_classification_dataset.BraincoObjectClassificationDataset
   config:
     window_time: ${data.window_time}
     window_overlap: ${data.window_overlap}
@@ -36,5 +36,6 @@ dataset:
     bias_noise_std: 0
     bias_range: 0
     pose_type: fingertip
-  data_path: ${paths.data_root}/brainco/downstream/grasp_prediction
+  data_path: pretraining_dataset/brainco
   brainco_urdf_path: ${paths.data_root}/brainco/urdf/
+  # classes: [basket, box, doll, hammer, pot, towel]  # 생략하면 자동 감지

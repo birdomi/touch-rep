@@ -164,8 +164,11 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
     train_dset = data.Subset(dataset, train_indices)
     val_dset   = data.Subset(dataset, val_indices)
 
-    # Class distribution
-    CLASS_NAMES = {0: "Fail", 1: "Success"}
+    # Class distribution — object_classification 데이터셋은 object_classes 속성으로 클래스명 제공
+    if hasattr(dataset, "object_classes"):
+        CLASS_NAMES = {i: name for i, name in enumerate(dataset.object_classes)}
+    else:
+        CLASS_NAMES = {0: "Fail", 1: "Success"}
 
     def _class_dist(indices):
         return Counter(dataset.windows[i]["label"].item() for i in indices)
@@ -226,7 +229,8 @@ def get_dataloaders(cfg: DictConfig):
         train_dataloader, val_dataloader = get_dataloaders_d360_based(cfg)
     elif data_cfg.sensor == "xela":
         train_dataloader, val_dataloader = get_dataloader_xela(cfg)
-    elif data_cfg.sensor in ("brainco_grasp", "brainco_grasp_prediction", "brainco_grasp_multimodal"):
+    elif data_cfg.sensor in ("brainco_grasp", "brainco_grasp_prediction", "brainco_grasp_multimodal",
+                              "brainco_object_classification"):
         train_dataloader, val_dataloader = get_dataloader_brainco_grasp(cfg)
         return train_dataloader, val_dataloader, None
     else:

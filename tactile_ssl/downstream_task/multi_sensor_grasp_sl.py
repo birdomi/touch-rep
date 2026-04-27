@@ -16,10 +16,14 @@ Example config:
 """
 
 from typing import List, Optional
+import io
 import torch
 import torch.nn.functional as F
+import numpy as np
+from sklearn.metrics import f1_score, confusion_matrix, ConfusionMatrixDisplay
+import matplotlib.pyplot as plt
 
-from tactile_ssl.downstream_task.brainco_grasp_sl import BraincoGraspDetectionSLModule
+from tactile_ssl.downstream_task.brainco_grasp_sl import BraincoGraspDetectionSLModule, BraincoGraspProbe
 from tactile_ssl.utils.logging import get_pylogger
 
 log = get_pylogger(__name__)
@@ -42,11 +46,26 @@ class MultiSensorGraspDetectionSLModule(BraincoGraspDetectionSLModule):
         self,
         xela_num_frames: int = 10,
         finetune_modules: Optional[List[str]] = None,
+        mask_finetune: bool = False,
+        mask_ratio: float = 0.1,
+        num_classes: int = 2,
         **kwargs,
     ):
         super().__init__(**kwargs)
-        # self.xela_num_frames = xela_num_frames
-        # self._max_channels = xela_num_frames * getattr(self.model_encoder, "in_chans", 4)
+        self.mask_finetune = mask_finetune
+        self.mask_ratio = mask_ratio
+        self.num_classes = num_classes
+
+        # BraincoGraspDetectionSLModule hardcodes num_classes=2; override when needed
+        if num_classes != 2:
+            embed_dim = self.model_encoder.embed_dim
+            num_heads = getattr(self.model_encoder, "num_heads", 12)
+            self.classifier = BraincoGraspProbe(
+                num_classes=num_classes,
+                embed_dim=embed_dim,
+                num_heads=num_heads,
+            )
+            log.info(f"Classifier overridden: num_classes={num_classes}")
 
         if finetune_modules is not None and self.train_encoder:
             self._apply_partial_finetune(finetune_modules)
@@ -126,12 +145,16 @@ class MultiSensorGraspDetectionSLModule(BraincoGraspDetectionSLModule):
         # All samples are BrainCo (sensor_id=0)
         sensor_ids = torch.zeros(B * G, dtype=torch.long, device=sensor.device)
 
+        # mask_finetune: 학습 시에만 랜덤하게 fingertip 센서를 mask token으로 교체
+        finetune_mask_ratio = self.mask_ratio if (self.mask_finetune and self.training) else None
+
         with torch.no_grad() if not self.train_encoder else torch.enable_grad():
             self.model_encoder.eval()
             out = self.model_encoder.forward_features(
                 sensor_input, poses_input,
                 wrist_poses=wrist_input,
                 sensor_ids=sensor_ids,
+                finetune_mask_ratio=finetune_mask_ratio,
             )
             x_tokens = out["x_tokens"]   # (B*G, num_tokens, embed_dim)
 
@@ -158,3 +181,72 @@ class MultiSensorGraspDetectionSLModule(BraincoGraspDetectionSLModule):
             logits = self.classifier(embeddings.detach())
 
         return logits
+
+    def on_validation_epoch_end(self, trainer_instance=None):
+        # binary case → 부모 클래스가 처리
+        if self.num_classes == 2:
+            super().on_validation_epoch_end(trainer_instance)
+            return
+
+        # multi-class case
+        if not self.val_preds:
+            return
+
+        preds  = torch.cat(self.val_preds,  dim=0).cpu().numpy()
+        labels = torch.cat(self.val_labels, dim=0).cpu().numpy()
+
+        accuracy = float((preds == labels).sum() / len(preds))
+        f1       = float(f1_score(labels, preds, average="macro", zero_division=0))
+
+        class_labels = list(range(self.num_classes))
+        cm = confusion_matrix(labels, preds, labels=class_labels)
+
+        if self._in_test:
+            log.info("=" * 40)
+            log.info("Test Results (best val weights):")
+            log.info(f"Accuracy: {accuracy:.4f}  Macro-F1: {f1:.4f}")
+            log.info(f"Confusion Matrix:\n{cm}")
+            log.info("=" * 40)
+            self.last_test_metrics = {"accuracy": accuracy, "f1": f1}
+            if trainer_instance is not None:
+                trainer_instance.wandb.log({
+                    "test/overall_accuracy": accuracy,
+                    "test/f1_score": f1,
+                })
+            self.val_preds  = []
+            self.val_labels = []
+            return
+
+        log.info("=" * 40)
+        log.info("Validation Results:")
+        log.info(f"Accuracy: {accuracy:.4f}  Macro-F1: {f1:.4f}")
+        log.info(f"Confusion Matrix:\n{cm}")
+        log.info("=" * 40)
+
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_labels)
+        disp.plot(cmap="Blues")
+        fig = disp.ax_.get_figure()
+        fig.set_figwidth(8)
+        fig.set_figheight(8)
+        plt.tight_layout()
+        img_buf = io.BytesIO()
+        plt.savefig(img_buf, format="png")
+        plt.close("all")
+
+        self.last_val_metrics = {"accuracy": accuracy, "f1": f1}
+        if accuracy > self.best_val_metrics.get("accuracy", -1.0):
+            self.best_val_metrics = {"accuracy": accuracy, "f1": f1}
+            import copy
+            self._best_state_dict = copy.deepcopy(
+                {k: v.cpu() for k, v in self.state_dict().items()}
+            )
+            log.info(f"New best val accuracy: {accuracy:.4f} — weights saved.")
+
+        if trainer_instance is not None:
+            trainer_instance.wandb.log({
+                "val/accuracy": accuracy,
+                "val/f1_macro": f1,
+            })
+
+        self.val_preds  = []
+        self.val_labels = []

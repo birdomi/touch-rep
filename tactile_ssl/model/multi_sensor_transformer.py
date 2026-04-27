@@ -141,6 +141,7 @@ class MultiSensorTransformer(SignalTransformer):
         with_masktoken: bool = False,
         use_null_token: bool = False,
         use_partial_tactile: bool = False,
+        mask_finetune: bool = False,
         causal: bool = False,
         pre_fusion_depth: Optional[int] = None,
         normalization: Optional[DictConfig] = None,
@@ -151,8 +152,9 @@ class MultiSensorTransformer(SignalTransformer):
         )
         self.use_partial_tactile = use_partial_tactile
         self.use_null_token = use_null_token
-        if self.use_null_token:
-            with_masktoken = True  # null token 사용 시 mask token도 필요
+        self.mask_finetune = mask_finetune
+        if self.use_null_token or self.mask_finetune:
+            with_masktoken = True  # null token 또는 mask_finetune 사용 시 mask token도 필요
         # ── SignalTransformer 초기화 ──────────────────────────────────────
         # blocks, norm, pos_embed, register_tokens, mask_tok en 생성
         super().__init__(
@@ -199,7 +201,6 @@ class MultiSensorTransformer(SignalTransformer):
         # XELA:    Conv1d(4 → D, kernel=chunk, stride=chunk)  — seq_len만 다름
         self.patch_embed = nn.ModuleList([
             _make_embed1d(self.in_chans,      seq, chunk, D),  # sensor_id = 0 (BrainCo)
-            _make_embed1d(self.xela_in_chans, seq, chunk, D),  # sensor_id = 1 (XELA)
         ])
 
         # ── PatchEmbed1d: position stream (fingertip 3D pose) ─────────────
@@ -244,8 +245,8 @@ class MultiSensorTransformer(SignalTransformer):
                 m = m.unsqueeze(0).expand(NUM_SENSORS, -1).clone()
                 s = s.unsqueeze(0).expand(NUM_SENSORS, -1).clone()
         else:
-            m = torch.zeros(NUM_SENSORS, in_chans)
-            s = torch.ones(NUM_SENSORS, in_chans)
+            m = torch.zeros(in_chans)
+            s = torch.ones(in_chans)
         self.register_buffer("signal_mean", m)   # (2, 4)
         self.register_buffer("signal_std",  s)   # (2, 4)
 
@@ -368,25 +369,18 @@ class MultiSensorTransformer(SignalTransformer):
         x = self.normalize(x, sensor_ids)
 
         # --- PatchEmbed1d per sensor type ------------------------------------
-        if sensor_ids is None:
-            return _apply_embed1d(
-                x[..., :self.in_chans],
-                self.patch_embed[SENSOR_ID_BRAINCO],
-                B, N,
-            )
-
-        num_chunks = T // self.time_chunk_size
-        out = torch.zeros(B, num_chunks, N, self.embed_dim, device=x.device, dtype=x.dtype)
-
-        for sid in sensor_ids.unique().tolist():
-            mask = sensor_ids == sid
-            B_s  = int(mask.sum())
-            # BrainCo/XELA 모두 in_chans=4로 동일 처리, sensor별 patch_embed 사용
-            out[mask] = _apply_embed1d(
-                x[mask][..., :self.in_chans],
-                self.patch_embed[sid],
-                B_s, N,
-            )
+        out = _apply_embed1d(x, self.patch_embed[0], B, N
+        )
+        # for sid in sensor_ids.unique().tolist():
+        #     print(sid, )
+        #     mask = sensor_ids == sid
+        #     B_s  = int(mask.sum())
+        #     # BrainCo/XELA 모두 in_chans=4로 동일 처리, sensor별 patch_embed 사용
+        #     out[mask] = _apply_embed1d(
+        #         x[mask][..., :self.in_chans],
+        #         self.patch_embed[sid],
+        #         B_s, N,
+        #     )
 
         return out
 
@@ -430,7 +424,7 @@ class MultiSensorTransformer(SignalTransformer):
 
         sid = sensor_ids[0].item() if sensor_ids is not None else SENSOR_ID_BRAINCO
         # print(sensor_ids, sid)
-        for blk in self.sensor_block[sid]:
+        for blk in self.sensor_block[0]:
             x = blk(x, bias)
         return x
 
@@ -499,6 +493,8 @@ class MultiSensorTransformer(SignalTransformer):
 
         # Step 2: sensor + pos 토큰을 sequence 방향으로 concat
         fused = torch.cat([pos, sen], dim=1)   # (B_eff, 2*(N) + reg, D) 
+        # fused = pos # debugging
+
 
         # Step 3: fusion blocks — sensor와 position이 cross-attend
         for blk in self.blocks:
@@ -517,6 +513,7 @@ class MultiSensorTransformer(SignalTransformer):
         masktoken_masks: Optional[List[torch.Tensor]],
         skip_register: bool = False,
         mask_token_append: bool = False,
+        finetune_mask_ratio: Optional[float] = None,
     ):
         t, n = x.shape[-3], x.shape[-2]
         # print('##', x.shape, self.pos_embed.shape, self.pos_embed_fn)
@@ -551,17 +548,20 @@ class MultiSensorTransformer(SignalTransformer):
             attn_bias = None
 
 
+        if finetune_mask_ratio is not None:
+            B_fm, _, n_fm, _ = x.shape
+            rand = torch.rand(B_fm, n_fm, device=x.device)
+            random_mask = (rand < finetune_mask_ratio).unsqueeze(0)  # (1, B, N)
+            masktoken_masks = random_mask if masktoken_masks is None else (masktoken_masks | random_mask)
+
         if masktoken_masks is not None:
             x = self.apply_masktokens(x, masktoken_masks)
 
-        if mask_token_append:
+        if mask_token_append and self.use_null_token:  # mask_finetune만 true일 때는 skip
             B, T, _, C = x.shape
-            # [B, T, 42, C] 크기의 버퍼를 mask_token으로 채운다
             full = self.mask_token.expand(B, T, FULL_SKELETON_SIZE, C).clone()
-            # TACTILE_SENSOR_IDXS 위치에 기존 x 값을 덮어쓴다
             full[:, :, TACTILE_SENSOR_IDXS, :] = x
             x = full
-            # print(x.shape, full.shape)
 
     
         x = einops.rearrange(x, "b t n c -> b (t n) c")
@@ -582,6 +582,7 @@ class MultiSensorTransformer(SignalTransformer):
         mask_type: Optional[Literal["block", "tubelet"]] = None,
         masktoken_masks: Optional[List[torch.Tensor]] = None,
         pos_masks: Optional[torch.Tensor] = None,
+        finetune_mask_ratio: Optional[float] = None,
     ) -> dict:
         """전체 forward pass.
 
@@ -636,7 +637,7 @@ class MultiSensorTransformer(SignalTransformer):
         #   x:   (B_eff, n_keep_x, D)   — no register token (skip_register=True)
         #   pos: (B_eff, reg+n_keep_p, D) — register token prepended (or wrist token)
         _pos_masks = pos_masks if pos_masks is not None else masks
-        x,   bias     = self.prepare_tokens_with_mask(x,   masks,     mask_type, masktoken_masks, skip_register=True, mask_token_append = self.use_null_token)
+        x,   bias     = self.prepare_tokens_with_mask(x,   masks,     mask_type, masktoken_masks, skip_register=True, mask_token_append=self.use_null_token, finetune_mask_ratio=finetune_mask_ratio)
         if wrist_token is not None:
             pos, pos_bias = self.prepare_tokens_with_mask(pos, _pos_masks, mask_type, None, skip_register=True)
             # print(_pos_masks)
@@ -649,14 +650,8 @@ class MultiSensorTransformer(SignalTransformer):
         else:
             pos, pos_bias = self.prepare_tokens_with_mask(pos, _pos_masks, mask_type, None, skip_register=False)
 
-        # masks로 배치가 확장된 경우 sensor_ids도 같이 확
-        if sensor_ids is not None and masks is not None:
-            sensor_ids_eff = sensor_ids.unsqueeze(0).expand(masks.shape[0], -1).flatten()
-        else:
-            sensor_ids_eff = sensor_ids
-
         # --- sensor-specific pre-fusion blocks ------------------------------
-        sen = self.sensor_transform(x, sensor_ids_eff, bias)
+        sen = self.sensor_transform(x, sensor_ids, bias)
 
         # --- concat fusion: fused (B_eff, reg+n_keep_x+n_keep_p, D) --------
         x_prenorm, x_postnorm = self.transform_concat(sen, pos, masks, _pos_masks, bias)

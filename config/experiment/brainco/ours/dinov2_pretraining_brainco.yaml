@@ -1,12 +1,12 @@
 # @package _global_
 
 defaults:
-  - override /data: gigahands_oakinkv2
+  - override /data: brainco_pretraining
   - override /algorithm: gigahands_dinov2
   - _self_
 
 model_size: tiny
-experiment_name: dinov2_gigahands_oakinkv2_${model_size}
+experiment_name: dinov2_ours_brainco_${model_size}
 ckpt_path: ./
 
 wandb:
@@ -16,7 +16,7 @@ wandb:
   tags: ["gigahands", "oakinkv2", "${model_size}"]
 
 trainer:
-  max_epochs: 100
+  max_epochs: 500
   validation_frequency: 50
 
 algorithm:
@@ -24,7 +24,7 @@ algorithm:
   encoder:
     _target_: tactile_ssl.model.multi_sensor_tiny
     in_dim: 42              # 21 lh + 21 rh keypoints
-    in_chans: 1             # contact channel only
+    in_chans: 4             
     sequence_length: 3
     time_chunk_size: 3
     num_register_tokens: 1

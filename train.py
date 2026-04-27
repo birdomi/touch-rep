@@ -824,6 +824,7 @@ def get_dataloaders_brainco_based(cfg: DictConfig):
         if dataset_l.type == "teleop":
             train_episodes = dataset_l.get("train_dataset_ids", [])
             val_episodes = dataset_l.get("val_dataset_ids", [])
+            print(val_episodes)
             for obj in dataset_l.get("sequence_list", []):
                 object_classes.append(obj)
                 object_class_sizes.append(0)
@@ -866,22 +867,18 @@ def get_dataloaders_brainco_based(cfg: DictConfig):
     mean = [0.0] * 4
     std = [1.0] * 4
 
-    # Calculate BrainCo dataset statistics from actual sensor tensors.
-    # This supports both:
-    #   - BraincoSSLDataset / tactile_array      -> sensor[..., 4]
-    #   - BraincoGraspDetectionWorldDataset      -> sensor[..., 7]
+    # Calculate BrainCo dataset statistics via actual __getitem__ calls over all training samples.
     print("Calculating Brainco dataset statistics...")
-    sensor_windows = []
-    src_datasets = train_dset.datasets if hasattr(train_dset, "datasets") else [train_dset]
-    for ds in src_datasets:
-        inner = ds.dataset if hasattr(ds, "dataset") else ds
-        if hasattr(inner, "windows") and len(inner.windows) > 0:
-            sensor_windows.extend([w["sensor"].cpu().numpy() for w in inner.windows])
-        elif hasattr(inner, "tactile_array"):
-            sensor_windows.append(inner.tactile_array.astype(np.float32))
+    sensor_tensors = []
+    for i in range(len(train_dset)):
+        sample = train_dset[i]
+        if "sensor" in sample:
+            sensor = sample["sensor"]
+            arr = sensor.cpu().float().numpy() if isinstance(sensor, torch.Tensor) else np.array(sensor, dtype=np.float32)
+            sensor_tensors.append(arr)
 
-    if sensor_windows:
-        all_data_np = np.concatenate(sensor_windows, axis=0)  # (Total_T, num_sensors, channels)
+    if sensor_tensors:
+        all_data_np = np.concatenate(sensor_tensors, axis=0)  # (..., channels)
         num_chans = all_data_np.shape[-1]
         calc_mean = []
         calc_std = []
@@ -900,9 +897,11 @@ def get_dataloaders_brainco_based(cfg: DictConfig):
         std = calc_std
         print(f"Calculated mean: {mean}")
         print(f"Calculated std: {std}")
+        
     else:
         print("Could not calculate stats, using defaults")
-    
+
+
     if cfg.data.get("normalization") and cfg.data.normalization.get("mean") is None:
         with open_dict(cfg):
             cfg.data.normalization.mean = mean
@@ -1180,6 +1179,7 @@ def get_dataloaders(cfg: DictConfig):
         loader_args['sampler'] = train_sampler
     
     train_dataloader = data.DataLoader(train_dset, **loader_args)
+    print("len(val_dset):", len(val_dset))
     val_dataloader = data.DataLoader(val_dset, **cfg.data.val_dataloader)
     return train_dataloader, val_dataloader, sensor_means, sensor_stds
 

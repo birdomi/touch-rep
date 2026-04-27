@@ -10,6 +10,9 @@ assets/*
 experiments/*
 0313/*
 pretraining_dataset/*
+vis/*
+*.txt
+*.csv
 
 # C extensions
 *.so

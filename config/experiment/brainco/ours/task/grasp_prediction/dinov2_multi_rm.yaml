@@ -20,17 +20,19 @@ data:
   dataset:
     _target_: tactile_ssl.data.brainco_grasp_dataset.BraincoGraspDetectionDataset
     use_skeleton_poses: true
-    robot_to_human: true
+    robot_to_human: false
     retargeting_config_path_left: assets/brainco/revo2_left_hand.yml
     retargeting_config_path_right: assets/brainco/revo2_right_hand.yml
 task:
-  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_multi_sensor_pretrained/epoch-0200-all.ckpt
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_multi_sensor_pretrained/epoch-0500-all.ckpt
   #${paths.encoder_checkpoint_root}/dinov2_multi_sensor_pretrained/epoch-0030_0413.ckpt
+  mask_finetune: true
   train_encoder: true
   lora_rank: 0      # LoRA 활성화
   lora_alpha: 16.0  
   model_encoder:
     use_null_token: false
+    mask_finetune: true
     in_dim: 42
   finetune_modules:
     ~
