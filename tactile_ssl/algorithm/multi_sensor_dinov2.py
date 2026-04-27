@@ -5,10 +5,6 @@ by the corresponding per-sensor components of MultiSensorBraincoTransformer.
 
 sensor_id=0  →  BrainCo  (in_chans=4, padded to xela_in_chans)
 sensor_id=1  →  XELA     (in_chans=xela_num_frames * 4 = 40)
-
-When ``use_grl=True``, a domain-adversarial Gradient Reversal Layer is added:
-student CLS tokens are routed through a domain classifier via a GRL, forcing
-the encoder to produce sensor-invariant representations (DANN-style).
 """
 
 from typing import Any, Dict, Optional
@@ -19,51 +15,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .brainco_dinov2 import BraincoDINOv2Module
-from tactile_ssl.utils.logging import get_pylogger
-
-log = get_pylogger(__name__)
-
-
-# ── Gradient Reversal Layer ────────────────────────────────────────────────────
-
-class _GRLFunction(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, alpha):
-        ctx.save_for_backward(torch.tensor(alpha, dtype=torch.float32))
-        return x.clone()
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        (alpha,) = ctx.saved_tensors
-        return -alpha.item() * grad_output, None
-
-
-class GradientReversalLayer(nn.Module):
-    """Passes input forward unchanged; reverses and scales gradients on backward."""
-
-    def __init__(self, alpha: float = 1.0):
-        super().__init__()
-        self.alpha = alpha
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return _GRLFunction.apply(x, self.alpha)
-
-
-# ── Domain Classifier ──────────────────────────────────────────────────────────
-
-class DomainClassifier(nn.Module):
-    """Small MLP predicting sensor domain (0=BrainCo, 1=XELA)."""
-
-    def __init__(self, embed_dim: int, num_domains: int = 2, hidden_dim: int = 64):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(embed_dim, hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim, num_domains),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
 
 
 # ── MultiSensorDINOv2Module ────────────────────────────────────────────────────
@@ -75,37 +26,50 @@ class MultiSensorDINOv2Module(BraincoDINOv2Module):
     ``sensor_id`` field present in every batch item is extracted and forwarded
     to the encoder's ``forward_features``, enabling per-sensor normalisation
     and embedding.
-
-    Args:
-        use_grl:        Enable domain-adversarial GRL training (default False).
-        grl_weight:     Gradient reversal scale α (default 1.0).
-        grl_hidden_dim: Hidden size of the domain classifier MLP (default 64).
-        **kwargs:       Forwarded to BraincoDINOv2Module.
     """
 
     def __init__(
         self,
-        use_grl: bool = False,
-        grl_weight: float = 1.0,
-        grl_hidden_dim: int = 64,
+        classification_loss: bool = False,
+        classification_num_classes: int = 6,
+        classification_target_key: str = "classification_id",
+        classification_loss_weight: float = 1.0,
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self.use_grl = use_grl
-        self.grl_weight = grl_weight
+        self.use_classification_loss = classification_loss
+        self.classification_target_key = classification_target_key
+        self.classification_loss_weight = classification_loss_weight
 
-        if use_grl:
+        if self.use_classification_loss:
             embed_dim = self.student_encoder_dict["backbone"].embed_dim
-            self.grl = GradientReversalLayer(alpha=grl_weight)
-            self.domain_classifier = DomainClassifier(
-                embed_dim=embed_dim,
-                num_domains=2,
-                hidden_dim=grl_hidden_dim,
-            )
-            log.info(
-                f"MultiSensorDINOv2Module: GRL enabled  "
-                f"alpha={grl_weight}, embed_dim={embed_dim}, hidden={grl_hidden_dim}"
-            )
+            self.classification_head = nn.Linear(embed_dim, classification_num_classes)
+
+    def _classification_loss(
+        self,
+        cls_tokens: torch.Tensor,
+        labels: torch.Tensor,
+    ):
+        logits = self.classification_head(cls_tokens)
+        # print(cls_tokens.shape, logits.shape, labels.shape)
+        loss = F.cross_entropy(logits, labels)
+        pred_labels = torch.argmax(logits, dim=1)
+        accuracy = (pred_labels == labels).float().mean()
+        return loss, accuracy
+
+    def log_on_batch_end(self, outputs, stage: str = "train", trainer_instance=None):
+        super().log_on_batch_end(outputs, stage=stage, trainer_instance=trainer_instance)
+        if trainer_instance is None:
+            return
+        if stage == "train" and not trainer_instance.should_log:
+            return
+        step = trainer_instance.step
+        for key in ("classification_loss", "classification_accuracy"):
+            if key in outputs:
+                trainer_instance.wandb.log({
+                    f"{stage}/{key}": outputs[key],
+                    f"global_{stage}_step": step,
+                })
 
     def sample_masks(self, x):
         """x/pos 각각 독립 마스크 생성 + full_ibot(sensor+pos) 반환.
@@ -143,6 +107,7 @@ class MultiSensorDINOv2Module(BraincoDINOv2Module):
         pos_global_masks: torch.Tensor,
         pos_local_masks: torch.Tensor,
         full_ibot: torch.Tensor,
+        labels: Optional[torch.Tensor] = None,
     ):
         assert global_masks is not None and local_masks is not None
 
@@ -154,6 +119,7 @@ class MultiSensorDINOv2Module(BraincoDINOv2Module):
         ibot_mask_indices = torch.nonzero(ibot_masks_flat).flatten()
         num_ibot_tokens   = len(ibot_mask_indices)
 
+
         student_global_dict = self.student_encoder_dict["backbone"].forward_features(
             xs, pos, wrist_poses=wrist_poses, sensor_ids=sensor_ids,
             masks=global_masks, mask_type="tubelet", masktoken_masks=ibot_masks,
@@ -164,6 +130,7 @@ class MultiSensorDINOv2Module(BraincoDINOv2Module):
             masks=local_masks, mask_type="tubelet",
             pos_masks=pos_local_masks,
         )
+        
 
         student_global_cls_tokens  = student_global_dict["x_norm_regtokens"][:, 0]
         student_local_cls_tokens   = student_local_dict["x_norm_regtokens"][:, 0]
@@ -285,22 +252,17 @@ class MultiSensorDINOv2Module(BraincoDINOv2Module):
         patch_loss = ibot_loss_scale * self.ibot_patch_loss(
             student_patch_tokens_after_head, teacher_ibot_softmaxed_centered
         )
-        return dino_loss + patch_loss + koleo_loss
+        ssl_loss = dino_loss + patch_loss + koleo_loss
+        result = {"ssl_loss": ssl_loss, "loss": ssl_loss}
 
-    def _grl_domain_loss(
-        self, x: torch.Tensor, pos: torch.Tensor, sensor_ids: torch.Tensor
-    ) -> torch.Tensor:
-        """student CLS token → GRL → domain CE loss.
+        if self.use_classification_loss and labels is not None:
+            labels_repeated = labels.repeat(self.num_local_masks)
+            cls_loss, accuracy = self._classification_loss(student_local_cls_tokens, labels_repeated)
+            result["loss"] = ssl_loss + self.classification_loss_weight * cls_loss
+            result["classification_loss"] = cls_loss
+            result["classification_accuracy"] = accuracy
 
-        The GRL multiplies gradients by -alpha before they reach the backbone,
-        pushing the encoder to produce indistinguishable sensor-type features.
-        """
-        cls_tokens = self.student_encoder_dict["backbone"].forward_sensor_cls(
-            x, sensor_ids=sensor_ids
-        )
-        #cls_tokens = student_dict["x_norm_regtokens"][:, 0]   # (B, embed_dim)
-        domain_logits = self.domain_classifier(self.grl(cls_tokens))
-        return F.cross_entropy(domain_logits, sensor_ids)
+        return result
 
     def training_step(self, batch: Dict[str, Any], batch_idx: int) -> Dict:
         self.step += 1
@@ -313,21 +275,26 @@ class MultiSensorDINOv2Module(BraincoDINOv2Module):
         
         # print(x.shape, pos.shape, sensor_ids.shape)
 
+        if self.use_classification_loss and self.classification_target_key not in batch:
+            raise KeyError(
+                f"classification_loss=True requires batch['{self.classification_target_key}']"
+            )
+        labels = batch.get(self.classification_target_key)
+
         global_masks, local_masks, ibot_masks, \
             pos_global_masks, pos_local_masks, full_ibot = self.sample_masks(x)
-        loss = self.forward(
+        fwd = self.forward(
             x, pos, wrist_poses, sensor_ids,
             global_masks, local_masks, ibot_masks,
             pos_global_masks, pos_local_masks, full_ibot,
+            labels=labels,
         )
+        loss = fwd["loss"]
 
-        output = {"ssl_loss": loss.item()}
-
-        # ── GRL domain-adversarial loss ────────────────────────────────────────
-        if self.use_grl:
-            grl_loss = self._grl_domain_loss(x, pos, sensor_ids)
-            loss = loss + grl_loss
-            output["grl_loss"] = grl_loss.item()
+        output = {"ssl_loss": fwd["ssl_loss"].item()}
+        if "classification_loss" in fwd:
+            output["classification_loss"] = fwd["classification_loss"].item()
+            output["classification_accuracy"] = fwd["classification_accuracy"]
 
         # ── online probes ──────────────────────────────────────────────────────
         embedding     = None

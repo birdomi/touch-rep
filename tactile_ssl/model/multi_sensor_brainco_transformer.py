@@ -232,33 +232,6 @@ class MultiSensorBraincoTransformer(BraincoTransformer):
             out[mask] = curr
         return out, out
 
-    # ── Intermediate sensor-block CLS ────────────────────────────────────────
-
-    def forward_sensor_cls(
-        self,
-        x: torch.Tensor,
-        sensor_ids: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """Return the register (CLS) token after per-sensor blocks only.
-
-        Runs pre_embed → prepare_tokens_with_mask (no masking) → sensor_transform
-        and returns ``sen[:, 0]`` — the CLS token at the intermediate stage
-        before the shared fusion blocks.  Used for domain-adversarial GRL loss.
-
-        Args:
-            x:          (B, 1, N, C_max)
-            sensor_ids: (B,) long tensor, or None (falls back to BrainCo)
-
-        Returns:
-            cls: (B, embed_dim)
-        """
-        x = self.pre_embed(x, sensor_ids=sensor_ids)        # (B, 1, N, D)
-        x, bias = self.prepare_tokens_with_mask(x, None, None, None)
-        # x: (B, num_reg_tokens + N, D)
-
-        sen, _ = self.sensor_transform(x, sensor_ids, bias)
-        return sen[:, 0]   # register / CLS token
-
     # ── forward_features ─────────────────────────────────────────────────────
 
     def forward_features(

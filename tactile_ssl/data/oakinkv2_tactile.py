@@ -105,8 +105,67 @@ class OakInkV2TactileDataset(data.Dataset):
                 self.windows.append((seq_idx, start))
         log.info(f"  Total windows: {len(self.windows)}")
 
+        # Pre-compute classification_id for every window (no disk I/O, uses loaded arrays)
+        self.window_labels: List[int] = []
+        for seq_idx, start in self.windows:
+            seq = self._sequences[seq_idx]
+            window = seq.joint_data[start : start + self.window_size]
+            self.window_labels.append(self._compute_classification_id(window))
+
+        _CLASS_NAMES = {
+            0: "no touch",
+            1: "LH only (no pinch)",
+            2: "LH pinch (thumb+)",
+            3: "RH only (no pinch)",
+            4: "RH pinch (thumb+)",
+            5: "both hands",
+        }
+        from collections import Counter
+        total = len(self.window_labels)
+        counts = Counter(self.window_labels)
+        log.info("  classification_id distribution:")
+        for cls in range(6):
+            cnt = counts.get(cls, 0)
+            log.info(f"    [{cls}] {_CLASS_NAMES[cls]:22s}: {cnt:6d}  ({100*cnt/total:.1f}%)")
+
         self.tactile_mean = None
         self.tactile_std = None
+
+    @staticmethod
+    def _compute_classification_id(window: np.ndarray, threshold: float = 0.0) -> int:
+        """
+        window: (W, 42, 4)  — W frames, 42 joints (0-20 LH, 21-41 RH), ch3=tactile
+
+        Classes
+        -------
+        0  no touch
+        1  left hand only,  1 finger  OR  2+ fingers without thumb
+        2  left hand only,  thumb + ≥1 other finger (≥2 total)
+        3  right hand only, 1 finger  OR  2+ fingers without thumb
+        4  right hand only, thumb included (any count)
+        5  both hands have touch
+        """
+        _RH_TIPS = [t + 21 for t in _MP_TIPS]
+
+        tactile = window[:, :, 3]                         # (W, 42)
+        lh_touch = (tactile[:, _MP_TIPS] > threshold).any(axis=0)   # (5,) bool
+        rh_touch = (tactile[:, _RH_TIPS] > threshold).any(axis=0)   # (5,) bool
+
+        lh_any = lh_touch.any()
+        rh_any = rh_touch.any()
+
+        if lh_any and rh_any:
+            return 5
+        if lh_any:
+            # lh_touch[0] == thumb, needs thumb + at least one more for class 2
+            if lh_touch[0] and lh_touch.sum() >= 2:
+                return 2
+            return 1
+        if rh_any:
+            if rh_touch[0] and rh_touch.sum() >= 2:  # thumb included
+                return 4
+            return 3
+        return 0
 
     def update_normalization(self, mean, std):
         self.tactile_mean = float(np.asarray(mean).ravel()[0])
@@ -134,6 +193,7 @@ class OakInkV2TactileDataset(data.Dataset):
             "sensor_poses": torch.from_numpy(sensor_poses).float(),
             "wrist_poses": torch.from_numpy(wrist_poses.copy()).float(),
             "sensor_id": torch.tensor(0, dtype=torch.long),
+            "classification_id": torch.tensor(self.window_labels[idx], dtype=torch.long),
         }
 
 

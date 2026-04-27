@@ -396,7 +396,12 @@ class Trainer:
             self.fabric.call("on_validation_batch_end", out, batch, batch_idx)
             self._current_val_return = out
 
-            self._format_iterable(iterable, self._current_val_return["loss"], "val")
+            _progbar = {
+                k: v for k, v in self._current_val_return.items()
+                if isinstance(v, (float, int))
+                or (isinstance(v, torch.Tensor) and v.ndim == 0)
+            }
+            self._format_iterable(iterable, _progbar, "val")
 
             self.global_val_step += 1
 
