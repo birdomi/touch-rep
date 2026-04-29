@@ -727,6 +727,45 @@ def get_dataloaders_gigahands_based(cfg: DictConfig):
         )
         train_datasets = [oi_train, ar_train, tc_train]
         val_datasets   = [oi_val,   ar_val,   tc_val]
+    elif sensor == "oakinkv2_arctic_taco_hot3d":
+        # ── Combined: OakInkV2 + Arctic + TACO + HOT3D ──────────────────────
+        oi_kwargs = dict(
+            data_root=data_cfg.oakinkv2_data_root,
+            window_size=window_size, window_stride=window_stride,
+            train_val_split=train_val_split, scenes=scenes,
+        )
+        ar_kwargs = dict(
+            data_root=data_cfg.arctic_data_root,
+            window_size=window_size, window_stride=window_stride,
+            train_val_split=train_val_split, scenes=scenes,
+        )
+        tc_kwargs = dict(
+            data_root=data_cfg.taco_data_root,
+            window_size=window_size, window_stride=window_stride,
+            train_val_split=train_val_split, scenes=scenes,
+        )
+        h3_kwargs = dict(
+            data_root=data_cfg.hot3d_data_root,
+            window_size=window_size, window_stride=window_stride,
+            train_val_split=train_val_split, scenes=scenes,
+        )
+        oi_train = OakInkV2TactileDataset(split="train", **oi_kwargs)
+        oi_val   = OakInkV2TactileDataset(split="val",   **oi_kwargs)
+        ar_train = OakInkV2TactileDataset(split="train", **ar_kwargs)
+        ar_val   = OakInkV2TactileDataset(split="val",   **ar_kwargs)
+        tc_train = OakInkV2TactileDataset(split="train", **tc_kwargs)
+        tc_val   = OakInkV2TactileDataset(split="val",   **tc_kwargs)
+        h3_train = OakInkV2TactileDataset(split="train", **h3_kwargs)
+        h3_val   = OakInkV2TactileDataset(split="val",   **h3_kwargs)
+
+        all_contact = (
+            [seq.joint_data[..., 3].reshape(-1) for seq in oi_train._sequences] +
+            [seq.joint_data[..., 3].reshape(-1) for seq in ar_train._sequences] +
+            [seq.joint_data[..., 3].reshape(-1) for seq in tc_train._sequences] +
+            [seq.joint_data[..., 3].reshape(-1) for seq in h3_train._sequences]
+        )
+        train_datasets = [oi_train, ar_train, tc_train, h3_train]
+        val_datasets   = [oi_val,   ar_val,   tc_val,   h3_val]
     else:
         # ── Single dataset ──────────────────────────────────────────────────
         dataset_cls = OakInkV2TactileDataset if sensor in ("oakinkv2", "taco") else GigaHandsTactileDataset
@@ -768,12 +807,16 @@ def get_dataloaders_gigahands_based(cfg: DictConfig):
     val_dset.sensor_std    = [std_val]
 
     # ── Compute pose normalization stats for OakInkV2 wrist-local poses ─────
-    if sensor in ("oakinkv2", "oakinkv2_arctic", "oakinkv2_arctic_taco"):
+    if sensor in ("oakinkv2", "oakinkv2_arctic", "oakinkv2_arctic_taco", "hot3d", "oakinkv2_arctic_taco_hot3d"):
         logger.info(f"Computing {sensor} pose normalization stats…")
         if sensor == "oakinkv2_arctic":
             pose_sequences = oi_train._sequences + ar_train._sequences
         elif sensor == "oakinkv2_arctic_taco":
             pose_sequences = oi_train._sequences + ar_train._sequences + tc_train._sequences
+        elif sensor == "oakinkv2_arctic_taco_hot3d":
+            pose_sequences = oi_train._sequences + ar_train._sequences + tc_train._sequences + h3_train._sequences
+        elif sensor == "hot3d":
+            pose_sequences = train_ds._sequences
         else:
             pose_sequences = train_ds._sequences
         all_pos = [seq.joint_data[..., :3].reshape(-1, 3) for seq in pose_sequences]
@@ -1158,7 +1201,7 @@ def get_dataloaders(cfg: DictConfig):
         train_dset, val_dset = get_dataloaders_gelsight_based(cfg)
     elif cfg.data.sensor == "actionsense":
         train_dset, val_dset = get_dataloaders_actionsense_based(cfg)
-    elif cfg.data.sensor in ["gigahands", "oakinkv2", "gigahands_oakinkv2", "oakinkv2_arctic", "taco", "oakinkv2_arctic_taco"]:
+    elif cfg.data.sensor in ["gigahands", "oakinkv2", "gigahands_oakinkv2", "oakinkv2_arctic", "taco", "oakinkv2_arctic_taco", "hot3d", "oakinkv2_arctic_taco_hot3d"]:
         train_dset, val_dset = get_dataloaders_gigahands_based(cfg)
         sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
     elif cfg.data.sensor == "brainco":

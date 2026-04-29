@@ -1,0 +1,30 @@
+train_dataloader:
+  batch_size: 128
+  num_workers: 8
+  shuffle: true
+  drop_last: true
+  pin_memory: true
+  persistent_workers: true
+
+val_dataloader:
+  batch_size: 128
+  num_workers: 8
+  shuffle: false
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+normalization:
+  mean: null   # populated at runtime by get_dataloaders_gigahands_based()
+  std: null
+
+sensor: oakinkv2_arctic_taco_hot3d
+
+oakinkv2_data_root: pretraining_dataset/OakInkv2
+arctic_data_root: pretraining_dataset/Arctic
+taco_data_root: pretraining_dataset/TACO
+hot3d_data_root: pretraining_dataset/hot3d
+window_size: 3
+window_stride: 3
+train_val_split: 1.0
+scenes: null

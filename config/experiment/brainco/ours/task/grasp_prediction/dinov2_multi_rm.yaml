@@ -24,7 +24,7 @@ data:
     retargeting_config_path_left: assets/brainco/revo2_left_hand.yml
     retargeting_config_path_right: assets/brainco/revo2_right_hand.yml
 task:
-  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_multi_sensor_pretrained/epoch-0500-all.ckpt
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_multi_sensor_pretrained/epoch-0150-all-cls.ckpt
   #${paths.encoder_checkpoint_root}/dinov2_multi_sensor_pretrained/epoch-0030_0413.ckpt
   mask_finetune: true
   train_encoder: true

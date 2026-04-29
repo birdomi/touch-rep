@@ -35,9 +35,9 @@ mkdir -p "${LOG_DIR}"
 # 주석 처리하면 해당 실험 스킵
 
 EXPERIMENTS=(
-    "object_classification/dinov2_multi_scratch"
-    "object_classification/dinov2_from_scratch"
-    "object_classification/dinov2_multi"
+    # "object_classification/dinov2_multi_scratch"
+    # "object_classification/dinov2_from_scratch"
+    # "object_classification/dinov2_multi"
     "object_classification/dinov2_multi_mask"
     "object_classification/dinov2_multi_mask_rm"
     # "object_classification/dinov2_multi:checkpoints/dinov2_multi_sensor_pretrained/epoch-0300-taco.ckpt"

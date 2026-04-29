@@ -20,7 +20,7 @@ data:
   dataset:
     use_skeleton_poses: true
 task:
-  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_multi_sensor_pretrained/epoch-0500-all.ckpt
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_multi_sensor_pretrained/epoch-0150-all-cls.ckpt
   train_encoder: true
   lora_rank: 0
   lora_alpha: 16.0

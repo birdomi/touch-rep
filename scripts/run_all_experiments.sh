@@ -52,7 +52,7 @@ DETECTION_EXPERIMENTS=(
 )
 
 PREDICTION_EXPERIMENTS=(
-    "grasp_prediction/dinov2_multi_scratch"
+    # "grasp_prediction/dinov2_multi_scratch"
     "grasp_prediction/dinov2_multi"
     "grasp_prediction/dinov2_multi_mask"
     "grasp_prediction/dinov2_multi_mask_rm"
