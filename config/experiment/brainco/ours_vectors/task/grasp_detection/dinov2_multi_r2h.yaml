@@ -1,12 +1,12 @@
 # @package _global_
 defaults:
-  - override /data: brainco_grasp_prediction
-  - override /task: multi_sensor_grasp_prediction
+  - override /data: brainco_grasp
+  - override /task: multi_sensor_grasp_detection
   - _self_
 
 ssl_name: dinov2
 sensor: brainco
-experiment_name: grasp_prediction_multi_sensor
+experiment_name: grasp_detection_multi_sensor
 ckpt_path: ./
 
 resume_id: ~
@@ -24,13 +24,13 @@ data:
     retargeting_config_path_left: assets/brainco/revo2_left_hand.yml
     retargeting_config_path_right: assets/brainco/revo2_right_hand.yml
 task:
-  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_multi_sensor_pretrained/epoch-0500-all-cls.ckpt
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_multi_sensor_pretrained/epoch-0110-all.ckpt
   #${paths.encoder_checkpoint_root}/dinov2_multi_sensor_pretrained/epoch-0030_0413.ckpt
   train_encoder: true
   lora_rank: 0      # LoRA 활성화
   lora_alpha: 16.0  
   model_encoder:
-    use_null_token: true
+    use_null_token: false
     in_dim: 42
   finetune_modules:
     ~

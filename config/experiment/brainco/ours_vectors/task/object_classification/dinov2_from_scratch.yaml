@@ -1,0 +1,28 @@
+# @package _global_
+defaults:
+  - override /data: brainco_object_classification
+  - override /task: multi_sensor_object_classification
+  - _self_
+
+ssl_name: dinov2
+sensor: brainco
+experiment_name: object_classification_from_scratch
+ckpt_path: ./
+
+resume_id: ~
+train_data_budget: 1.0
+val_data_budget: 1.0
+
+fold: 0
+num_folds: 4
+
+data:
+  dataset:
+    use_skeleton_poses: false
+task:
+  checkpoint_encoder: ~
+  train_encoder: true
+  model_encoder:
+    use_null_token: false
+    in_dim: 42
+  finetune_modules: ~

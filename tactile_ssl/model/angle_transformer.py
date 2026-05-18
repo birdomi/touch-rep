@@ -1,0 +1,473 @@
+"""AngleTransformer: dual-stream transformer for hand angle + joint contact data.
+
+Architecture
+------------
+Two asymmetric streams:
+  sensor : joint_contact  (B, T, N_joints=42,  C=1) — contact per joint
+  pos    : finger_angles  (B, T, N_fingers=10, C=4) — finger angle vectors
+
+Both streams are independently compressed via PatchEmbed1d (Conv1d), then:
+  1. sensor_block  : pre-fusion self-attention on sensor tokens
+  2. Concat fusion : cat([pos, sen]) → shared blocks → output
+
+No wrist_poses or sensor_id routing.
+"""
+
+from functools import partial
+from typing import Callable, List, Literal, Optional
+
+import einops
+import torch
+import torch.nn as nn
+from omegaconf import DictConfig
+
+from tactile_ssl.utils.logging import get_pylogger
+from tactile_ssl.model import SignalTransformer
+from .layers import MemEffAttention, Mlp, PatchEmbed1d
+from .layers import NestedTensorBlock as Block
+
+log = get_pylogger(__name__)
+
+
+def _make_embed1d(in_chans: int, seq_len: int, chunk_size: int, embed_dim: int) -> PatchEmbed1d:
+    return PatchEmbed1d(
+        modal_chans=in_chans,
+        modal_lens=seq_len,
+        chunk_size=chunk_size,
+        embed_dim=embed_dim,
+        padding=0,
+    )
+
+
+def _apply_embed1d(x: torch.Tensor, embed: PatchEmbed1d, B: int) -> torch.Tensor:
+    """(B, T, N, C) → PatchEmbed1d per sensor → (B, num_chunks, N, D)."""
+    x = einops.rearrange(x, "b t n c -> (b n) c t")
+    x = embed(x)                              # (B*N, D, num_chunks)
+    x = einops.rearrange(x, "(b n) c t -> b t n c", b=B)
+    return x
+
+
+class AngleTransformer(SignalTransformer):
+    """Dual-stream Transformer for hand angle + contact pretraining.
+
+    Args:
+        in_dim          : N_joints for contact stream (e.g. 42)
+        in_chans        : C for contact stream (e.g. 1)
+        pos_in_dim      : N_fingers for angle stream (e.g. 10)
+        pos_in_chans    : C for angle stream (e.g. 4)
+        sequence_length : input time length T
+        time_chunk_size : Conv1d stride (T → T//chunk tokens)
+        embed_dim       : transformer hidden dim
+        depth           : shared fusion block count
+        pre_fusion_depth: sensor_block depth (default depth//4)
+        normalization   : DictConfig(mean, std) for contact stream, shape (in_chans,)
+        pos_normalization: DictConfig(mean, std) for angle stream, shape (pos_in_chans,)
+    """
+
+    def __init__(
+        self,
+        in_dim: int = 42,
+        in_chans: int = 1,
+        pos_in_dim: int = 10,
+        pos_in_chans: int = 4,
+        sequence_length: int = 1,
+        time_chunk_size: int = 1,
+        embed_dim: int = 192,
+        depth: int = 8,
+        num_heads: int = 3,
+        mlp_ratio: float = 4.0,
+        ffn_layer: str = "mlp",
+        qkv_bias: bool = True,
+        proj_bias: bool = True,
+        ffn_bias: bool = True,
+        act_layer: Callable[..., nn.Module] = nn.GELU,
+        norm_layer: Callable[..., nn.Module] = partial(nn.LayerNorm, eps=1e-6),
+        pos_embed_fn: Literal["sinusoidal", "learned"] = "learned",
+        init_values: Optional[float] = None,
+        num_register_tokens: int = 1,
+        drop_path_rate: float = 0.0,
+        drop_path_uniform: bool = False,
+        with_masktoken: bool = False,
+        causal: bool = False,
+        pre_fusion_depth: Optional[int] = None,
+        normalization: Optional[DictConfig] = None,
+    ):
+        assert sequence_length % time_chunk_size == 0, (
+            f"sequence_length({sequence_length}) must be divisible by time_chunk_size({time_chunk_size})"
+        )
+        assert in_dim % 2 == 0, f"in_dim({in_dim}) must be even (left/right hand)"
+        assert pos_in_dim % 2 == 0, f"pos_in_dim({pos_in_dim}) must be even (left/right hand)"
+
+        super().__init__(
+            in_dim=in_dim,
+            in_chans=in_chans,
+            sequence_length=sequence_length,
+            time_chunk_size=time_chunk_size,
+            embed_dim=embed_dim,
+            depth=depth,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            ffn_layer=ffn_layer,
+            qkv_bias=qkv_bias,
+            proj_bias=proj_bias,
+            ffn_bias=ffn_bias,
+            act_layer=act_layer,
+            norm_layer=norm_layer,
+            pos_embed_fn=pos_embed_fn,
+            init_values=init_values,
+            num_register_tokens=num_register_tokens,
+            drop_path_rate=drop_path_rate,
+            drop_path_uniform=drop_path_uniform,
+            with_masktoken=with_masktoken,
+            causal=causal,
+        )
+
+        self.in_dim      = in_dim
+        self.in_chans    = in_chans
+        self.pos_in_dim  = pos_in_dim
+        self.pos_in_chans = pos_in_chans
+        self.pre_fusion_depth = pre_fusion_depth if pre_fusion_depth is not None else depth // 4
+
+        D     = embed_dim
+        chunk = time_chunk_size
+        seq   = sequence_length
+
+        # ── Positional embeddings ──────────────────────────────────────────────
+        # Each embed is (2, N//2, D): index 0 = pre-fusion stage, index 1 = fusion stage
+        # hand_embed (2, D): left[0] / right[1] hand bias, shared across streams
+        self.contact_pos_embed    = nn.Parameter(torch.zeros(2, in_dim     // 2, D))  # for contact stream
+        self.angle_pos_embed = nn.Parameter(torch.zeros(2, pos_in_dim // 2, D))  # for angle stream
+        self.hand_embed   = nn.Parameter(torch.zeros(2, D))
+
+        # ── PatchEmbed1d ───────────────────────────────────────────────────────
+        self.sensor_embed    = _make_embed1d(in_chans,     seq, chunk, D)  # contact
+        self.angle_embed = _make_embed1d(pos_in_chans, seq, chunk, D)  # angles
+
+        # ── Pre-fusion sensor blocks ───────────────────────────────────────────
+        self.sensor_block = nn.ModuleList([
+            Block(
+                attn_class=MemEffAttention,
+                dim=D,
+                num_heads=num_heads,
+                mlp_ratio=mlp_ratio,
+                qkv_bias=qkv_bias,
+                proj_bias=proj_bias,
+                ffn_bias=ffn_bias,
+                drop_path=0.0,
+                norm_layer=norm_layer,
+                act_layer=act_layer,
+                ffn_layer=Mlp,
+                init_values=init_values,
+            )
+            for _ in range(self.pre_fusion_depth)
+        ])
+
+        # ── Normalization buffers ──────────────────────────────────────────────
+        if normalization is not None:
+            m = torch.tensor(normalization.mean, dtype=torch.float32)
+            s = torch.tensor(normalization.std,  dtype=torch.float32)
+        else:
+            m = torch.zeros(in_chans)
+            s = torch.ones(in_chans)
+        self.register_buffer("signal_mean", m)  # (in_chans,)
+        self.register_buffer("signal_std",  s)  # (in_chans,)
+
+
+        self.init_weights()
+        nn.init.trunc_normal_(self.hand_embed, std=0.02)
+
+        num_chunks = seq // chunk
+        log.info(
+            f"AngleTransformer: T={seq}, chunk={chunk}, num_chunks={num_chunks}, "
+            f"N_contact={in_dim}, N_angles={pos_in_dim}, "
+            f"pre_fusion_depth={self.pre_fusion_depth}, embed_dim={D}"
+        )
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _full_embed(self, per_hand: torch.Tensor) -> torch.Tensor:
+        """Combine per-hand positional embed with hand bias.
+
+        Args:
+            per_hand : (2, N//2, D) — index 0=lh, 1=rh
+
+        Returns:
+            (N, D) full positional embedding
+        """
+        h  = self.hand_embed.float()              # (2, D)
+        lh = per_hand[0].float() + h[0]           # (N//2, D)
+        rh = per_hand[1].float() + h[1]           # (N//2, D)
+        return torch.cat([lh, rh], dim=0)         # (N, D)
+
+    # ── normalization ─────────────────────────────────────────────────────────
+
+    def normalize(self, x: torch.Tensor) -> torch.Tensor:
+        """Normalize contact stream in-place clone."""
+        x = x.clone()
+        x = (x - self.signal_mean) / self.signal_std.clamp(min=1e-6)
+        return x
+
+    # ── embedding ─────────────────────────────────────────────────────────────
+
+    def pre_sensor_embed(self, x: torch.Tensor) -> torch.Tensor:
+        """Zero-fill negatives → normalize → PatchEmbed1d.
+
+        Args:
+            x : (B, T, N_joints, C)
+
+        Returns:
+            (B, num_chunks, N_joints, D)
+        """
+        B = x.shape[0]
+        x = x.clone()
+        x[x < 0] = 0.0
+        x = self.normalize(x)
+        return _apply_embed1d(x, self.sensor_embed, B)
+
+    def pre_pos_embed(self, pos: torch.Tensor) -> torch.Tensor:
+        """PatchEmbed1d for angle stream (no normalization).
+
+        Args:
+            pos : (B, T, N_fingers, pos_in_chans)
+
+        Returns:
+            (B, num_chunks, N_fingers, D)
+        """
+        return _apply_embed1d(pos, self.angle_embed, pos.shape[0])
+
+    # ── token preparation ─────────────────────────────────────────────────────
+
+    def prepare_tokens_with_mask(
+        self,
+        x,
+        masks,
+        mask_type: Optional[Literal["block", "tubelet"]],
+        masktoken_masks: Optional[List[torch.Tensor]],
+        joint_embed: Optional[torch.Tensor] = None,
+        skip_register: bool = False,
+    ):
+        """Flatten + positional embed + masking + register token.
+
+        Args:
+            x            : (B, T, N, D)
+            masks        : token masking indices
+            mask_type    : "tubelet" or "block"
+            masktoken_masks: mask token positions
+            joint_embed  : (N, D) positional embedding for this stream.
+                           Uses self._full_embed(self.pos_embed, 0) if None.
+            skip_register: if True, do not prepend register token
+
+        Returns:
+            tokens   : (B_eff, seq, D)
+            attn_bias: causal bias or None
+        """
+        if joint_embed is not None:
+            n = x.shape[-2]
+            x = x + joint_embed.view(1, 1, n, -1)
+
+        if masks is not None:
+            if mask_type == "tubelet":
+                x = self.apply_tubelet_masks(x, masks)
+            elif mask_type == "block":
+                from tactile_ssl.utils.masking import apply_masks
+                x = apply_masks(x, masks)
+            else:
+                raise NotImplementedError(f"Unknown mask type: {mask_type}")
+
+        attn_bias = self.create_causal_mask(x) if self.causal else None
+
+        if masktoken_masks is not None:
+            x = self.apply_masktokens(x, masktoken_masks)
+
+        x = einops.rearrange(x, "b t n c -> b (t n) c")
+        if self.register_tokens is not None and not skip_register:
+            x = torch.cat([self.register_tokens.expand(x.shape[0], -1, -1), x], dim=1)
+
+        return x, attn_bias
+
+    # ── pre-fusion sensor blocks ───────────────────────────────────────────────
+
+    def sensor_transform(self, x: torch.Tensor, _bias) -> torch.Tensor:
+        """Pre-fusion self-attention over contact tokens."""
+        for blk in self.sensor_block:
+            x = blk(x, _bias)
+        return x
+
+    # ── fusion ────────────────────────────────────────────────────────────────
+
+    def transform_concat(
+        self,
+        sen: torch.Tensor,
+        pos: torch.Tensor,
+        sen_mask,
+        pos_mask,
+        bias,
+    ):
+        """Concat sensor and angle streams → fusion blocks → norm.
+
+        Args:
+            sen     : (B_eff, N_contact_keep,  D)  — after sensor_transform
+            pos     : (B_eff, reg+N_angle_keep, D)  — with register token
+            sen_mask: sensor stream mask indices (or None)
+            pos_mask: angle stream mask indices (or None)
+            bias    : attention bias
+
+        Returns:
+            x_prenorm, x_postnorm : both (B_eff, reg+N_contact+N_angle, D)
+        """
+        # Fusion-stage positional embeddings
+        sen_pe = self._full_embed(self.contact_pos_embed)        # (N_joints,  D)
+        ang_pe = self._full_embed(self.angle_pos_embed)  # (N_fingers, D)
+
+        if sen_mask is not None:
+            ns = sen_mask.shape[-1]
+            se = sen_pe[sen_mask.view(-1, ns)]
+            sen = sen + se
+
+            np_ = pos_mask.shape[-1]
+            ae = ang_pe[pos_mask.view(-1, np_)]
+            pos[:, 1:] = pos[:, 1:] + ae
+        else:
+            sen = sen + sen_pe
+            pos[:, 1:] = pos[:, 1:] + ang_pe
+
+        fused = torch.cat([pos, sen], dim=1)     # (B_eff, reg+N_a+N_s, D)
+
+        for blk in self.blocks:
+            fused = blk(fused, None)
+
+        x_norm = self.norm(fused)
+        return fused, x_norm
+
+    # ── forward ───────────────────────────────────────────────────────────────
+
+    def forward_features(
+        self,
+        x: torch.Tensor,
+        pos: torch.Tensor,
+        masks: Optional[torch.Tensor] = None,
+        mask_type: Optional[Literal["block", "tubelet"]] = None,
+        masktoken_masks: Optional[List[torch.Tensor]] = None,
+        pos_masks: Optional[torch.Tensor] = None,
+    ) -> dict:
+        """Full forward pass.
+
+        Args:
+            x         : (B, T, N_joints=42,  C=1)  — joint contact
+            pos       : (B, T, N_fingers=10, C=4)  — finger angles
+            masks     : sensor stream masking
+            mask_type : "block" or "tubelet"
+            masktoken_masks: mask token positions
+            pos_masks : angle stream masking (defaults to masks if None)
+
+        Returns:
+            dict with keys:
+              x_norm_regtokens   : (B_eff, num_register_tokens, D)
+              x_norm_patchtokens : (B_eff, num_patches, D)
+              x_prenorm          : (B_eff, num_patches, D)
+              x_tokens           : (B_eff, reg+patches, D)
+        """
+        # --- embed streams ---------------------------------------------------
+        x   = self.pre_sensor_embed(x)
+        pos = self.pre_pos_embed(pos)
+
+        # --- positional embeddings (pre-fusion stage) ------------------------
+        sen_pe = self._full_embed(self.contact_pos_embed)  # (N_joints,  D)
+        ang_pe = self._full_embed(self.angle_pos_embed)  # (N_fingers, D)
+
+        _pos_masks = pos_masks if pos_masks is not None else masks
+
+        x, bias = self.prepare_tokens_with_mask(
+            x, masks, mask_type, masktoken_masks,
+            joint_embed=sen_pe, skip_register=True,
+        )
+        pos, _ = self.prepare_tokens_with_mask(
+            pos, _pos_masks, mask_type, None,
+            joint_embed=ang_pe, skip_register=False,
+        )
+
+        # --- pre-fusion sensor attention -------------------------------------
+        sen = self.sensor_transform(x, bias)
+
+        # --- fusion ----------------------------------------------------------
+        x_prenorm, x_postnorm = self.transform_concat(
+            sen, pos, masks, _pos_masks, bias
+        )
+
+        r = self.num_register_tokens
+        return {
+            "x_norm_regtokens":   x_postnorm[:, :r],
+            "x_norm_patchtokens": x_postnorm[:, r:],
+            "x_prenorm":          x_prenorm[:, r:],
+            "x_tokens":           x_postnorm,
+        }
+
+    def forward(self, x, pos, **kwargs):
+        return self.forward_features(x, pos, **kwargs)["x_norm_patchtokens"]
+
+    def update_stats(
+        self,
+        signal_mean: torch.Tensor,
+        signal_std: torch.Tensor,
+        **_kwargs,  # ignore pos_mean/pos_std — angles are not normalized
+    ):
+        self.signal_mean = signal_mean
+        self.signal_std  = signal_std
+
+
+# ── factory functions ─────────────────────────────────────────────────────────
+
+def angle_tiny(
+    in_dim: int = 42,
+    in_chans: int = 1,
+    pos_in_dim: int = 10,
+    pos_in_chans: int = 4,
+    sequence_length: int = 1,
+    time_chunk_size: int = 1,
+    depth: int = 8,
+    num_register_tokens: int = 1,
+    **kwargs,
+) -> AngleTransformer:
+    """AngleTransformer tiny (embed_dim=192, depth=8)."""
+    return AngleTransformer(
+        in_dim=in_dim,
+        in_chans=in_chans,
+        pos_in_dim=pos_in_dim,
+        pos_in_chans=pos_in_chans,
+        sequence_length=sequence_length,
+        time_chunk_size=time_chunk_size,
+        embed_dim=192,
+        depth=depth,
+        num_heads=3,
+        mlp_ratio=4,
+        num_register_tokens=num_register_tokens,
+        **kwargs,
+    )
+
+
+def angle_small(
+    in_dim: int = 42,
+    in_chans: int = 1,
+    pos_in_dim: int = 10,
+    pos_in_chans: int = 4,
+    sequence_length: int = 1,
+    time_chunk_size: int = 1,
+    depth: int = 12,
+    num_register_tokens: int = 1,
+    **kwargs,
+) -> AngleTransformer:
+    """AngleTransformer small (embed_dim=384, depth=12)."""
+    return AngleTransformer(
+        in_dim=in_dim,
+        in_chans=in_chans,
+        pos_in_dim=pos_in_dim,
+        pos_in_chans=pos_in_chans,
+        sequence_length=sequence_length,
+        time_chunk_size=time_chunk_size,
+        embed_dim=384,
+        depth=depth,
+        num_heads=6,
+        mlp_ratio=4,
+        num_register_tokens=num_register_tokens,
+        **kwargs,
+    )

@@ -1,0 +1,36 @@
+# @package _global_
+
+defaults:
+  - override /data: brainco_xela_multi
+  - override /algorithm: multi_sensor_dinov2
+  - _self_
+
+model_size: tiny
+experiment_name: dinov2_multi_sensor_ours_${model_size}
+ckpt_path: ./
+
+wandb:
+  entity: ryk012
+  project: brainco_dinov2
+  group: dino_multi_sensor_ours_${model_size}
+  tags: ["multi_sensor", "brainco", "${model_size}", "conv1d", "T50", "ours"]
+
+trainer:
+  max_epochs: 1000
+  validation_frequency: 50
+
+algorithm:
+  centering: centering
+  encoder:
+    _target_: tactile_ssl.model.multi_sensor_tiny
+    in_dim: 10              # 센서 수 (손가락)
+    in_chans: 4             # BrainCo 채널 수
+    sequence_length: 3     # T=3: 0.1s @ 30 Hz
+    time_chunk_size: 3      # 3 // 3 = 1 temporal chunks per sensor
+    num_register_tokens: 1
+    pos_embed_fn: learned
+    with_masktoken: True
+    drop_path_rate: 0.3
+    drop_path_uniform: True
+    normalization: ${data.normalization}
+    causal: False

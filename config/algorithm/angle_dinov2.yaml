@@ -1,0 +1,66 @@
+_target_: tactile_ssl.algorithm.AngleDinov2Module
+
+classification_loss: true
+classification_num_classes: 6
+classification_target_key: classification_id
+classification_loss_weight: 1.0
+
+ibot_mask_ratio: [0.1, 0.5]
+
+encoder:
+  _target_: tactile_ssl.model.angle_tiny
+  in_dim: 42          # N_joints: 21 left-hand + 21 right-hand
+  in_chans: 1         # contact stream: single channel
+  pos_in_dim: 10      # N_fingers: 5 left-hand + 5 right-hand
+  pos_in_chans: 4     # angle stream: 4 angle values per finger
+  sequence_length: 1
+  time_chunk_size: 1
+  num_register_tokens: 1
+  pos_embed_fn: learned
+  with_masktoken: True
+  drop_path_rate: 0.3
+  drop_path_uniform: True
+  normalization: ${data.normalization}
+  causal: False
+
+dino_head:
+  _partial_: True
+  _target_: tactile_ssl.model.layers.DINOHead
+  out_dim: 65536
+
+num_global_masks: 2
+num_local_masks: 8
+min_keep_num_sensors: 1
+global_mask_scale: [0.6, 1.0]
+local_mask_scale: [0.3, 0.6]
+use_random_mask: true
+moving_average_decay: [0.994, 1.0]
+allow_mask_overlap: True
+teacher_temp: [0.04, 0.07]
+teacher_warmup_epochs: 10
+
+optim_cfg:
+  _partial_: True
+  _target_: torch.optim.AdamW
+  lr: 1e-4
+  weight_decay: 0.005
+
+lr_scheduler_cfg:
+  _partial_: True
+  _target_: tactile_ssl.model.custom_scheduler.WarmupCosineScheduler
+  steps_per_epoch: ???
+  T_max: ???
+  final_lr: 1.0e-6
+  start_lr: 1e-5
+  warmup_epochs: 1
+
+wd_scheduler_cfg:
+  _partial_: True
+  _target_: tactile_ssl.model.custom_scheduler.CosineWDSchedule
+  final_weight_decay: 0.04
+  ref_weight_decay: 0.004
+  T_max: ???
+# Reconstruction probe disabled: on_validation_batch_end hard-codes l=4 channels.
+online_probes: []
+online_probes_lrs: []
+reconstruction_log_freq: 20

@@ -10,6 +10,7 @@ from .cross_sensor_transformer import *  # noqa: F401
 from .brainco_transformer import *  # noqa: F401
 from .multi_sensor_brainco_transformer import *  # noqa: F401
 from .multi_sensor_transformer import *  # noqa: F401
+from .angle_transformer import *  # noqa: F401
 
 
 VIT_EMBED_DIMS = {

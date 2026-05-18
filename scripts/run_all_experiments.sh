@@ -52,14 +52,14 @@ DETECTION_EXPERIMENTS=(
 )
 
 PREDICTION_EXPERIMENTS=(
-    # "grasp_prediction/dinov2_multi_scratch"
+    "grasp_prediction/dinov2_multi_scratch"
     "grasp_prediction/dinov2_multi"
     "grasp_prediction/dinov2_multi_mask"
     "grasp_prediction/dinov2_multi_mask_rm"
     "grasp_prediction/dinov2_multi_rm"
     "grasp_prediction/dinov2_multi_r2h"
     "grasp_prediction/dinov2_multi_mask_r2h"
-    # "grasp_prediction/dinov2_from_scratch"
+    "grasp_prediction/dinov2_from_scratch"
     # "grasp_prediction/dinov2"
     # "grasp_prediction/dinov2_cat"
 )

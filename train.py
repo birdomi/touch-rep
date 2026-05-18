@@ -841,6 +841,60 @@ def get_dataloaders_gigahands_based(cfg: DictConfig):
     return train_dset, val_dset
 
 
+def get_dataloaders_hot3d_vector_based(cfg: DictConfig):
+    """Load HOT3D angle+contact vector dataset for AngleDinov2Module pretraining.
+
+    Returns train/val datasets with:
+      sensor_mean/std : (1,)  — joint_contact normalization stats
+      (finger_angles are NOT normalized — raw angle values are fed directly)
+    """
+    from tactile_ssl.data.angle_tactile import Hot3DAngleTactileDataset
+
+    data_cfg = cfg.data
+    kwargs = dict(
+        data_root=str(data_cfg.get("data_root", "pretraining_dataset/vectors/hot3d")),
+        window_size=int(data_cfg.get("window_size", 1)),
+        window_stride=int(data_cfg.get("window_stride", 1)),
+        train_val_split=float(data_cfg.get("train_val_split", 0.9)),
+    )
+
+    train_ds = Hot3DAngleTactileDataset(split="train", **kwargs)
+    val_ds   = Hot3DAngleTactileDataset(split="val",   **kwargs)
+
+    # ── Contact normalization stats (C=1, all joints + all frames) ────────────
+    logger.info("Computing HOT3D contact normalization stats...")
+    contact_chunks = []
+    for seq in train_ds._sequences:
+        contact_chunks.append(seq.lh_contact.reshape(-1))
+        contact_chunks.append(seq.rh_contact.reshape(-1))
+    if contact_chunks:
+        contact_arr  = np.concatenate(contact_chunks)
+        contact_mean = float(np.mean(contact_arr))
+        contact_std  = float(np.std(contact_arr))
+        contact_std  = contact_std if contact_std > 1e-6 else 1.0
+    else:
+        contact_mean, contact_std = 0.0, 1.0
+    logger.info(f"  contact  mean={contact_mean:.6f}  std={contact_std:.6f}")
+    logger.info("  angle    normalization skipped (raw values used)")
+
+    sensor_mean = [contact_mean]
+    sensor_std  = [contact_std]
+
+    with open_dict(cfg):
+        cfg.data.normalization.mean = sensor_mean
+        cfg.data.normalization.std  = sensor_std
+
+    for ds in (train_ds, val_ds):
+        ds.sensor_mean = sensor_mean
+        ds.sensor_std  = sensor_std
+
+    logger.info(
+        f"HOT3D vector: {len(train_ds)} train windows, "
+        f"{len(val_ds)} val windows  (window_size={kwargs['window_size']})"
+    )
+    return train_ds, val_ds
+
+
 def get_dataloaders_brainco_based(cfg: DictConfig):
     data_cfg = cfg.data
     
@@ -1203,6 +1257,9 @@ def get_dataloaders(cfg: DictConfig):
         train_dset, val_dset = get_dataloaders_actionsense_based(cfg)
     elif cfg.data.sensor in ["gigahands", "oakinkv2", "gigahands_oakinkv2", "oakinkv2_arctic", "taco", "oakinkv2_arctic_taco", "hot3d", "oakinkv2_arctic_taco_hot3d"]:
         train_dset, val_dset = get_dataloaders_gigahands_based(cfg)
+        sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
+    elif cfg.data.sensor == "hot3d_vector":
+        train_dset, val_dset = get_dataloaders_hot3d_vector_based(cfg)
         sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
     elif cfg.data.sensor == "brainco":
         train_dset, val_dset = get_dataloaders_brainco_based(cfg)

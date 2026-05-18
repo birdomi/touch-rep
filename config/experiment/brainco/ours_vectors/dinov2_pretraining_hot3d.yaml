@@ -1,0 +1,20 @@
+# @package _global_
+
+defaults:
+  - override /data: hot3d_vector
+  - override /algorithm: angle_dinov2
+  - _self_
+
+model_size: tiny
+experiment_name: dinov2_hot3d_vectors_${model_size}
+ckpt_path: ./
+
+wandb:
+  entity: ryk9012-gwangju-institute-of-science-and-technology
+  project: dinov2
+  group: dino_hot3d_vectors_${model_size}
+  tags: ["hot3d", "${model_size}"]
+
+trainer:
+  max_epochs: 200
+  validation_frequency: 50
