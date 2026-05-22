@@ -1,6 +1,6 @@
 train_dataloader:
   batch_size: 512
-  num_workers: 8
+  num_workers: 16
   shuffle: true
   drop_last: true
   pin_memory: true

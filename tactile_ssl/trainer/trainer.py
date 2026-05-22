@@ -24,7 +24,7 @@ class Trainer:
         accelerator: Union[str, Accelerator] = "auto",
         strategy: Union[str, Strategy] = "auto",
         devices: Union[List[int], str, int] = "auto",
-        precision: Union[str, int] = "32-true",
+        precision: Union[str, int] = "bf16-mixed", #"32-true", "transformer-engine-bfloat16"
         plugins: Optional[Union[str, Any]] = None,
         callbacks: Optional[Union[List[Any], Any]] = None,
         wandb_logger=None,

@@ -10,3 +10,4 @@ from .cross_sensor_dinov2 import CrossSensorDINOv2Module  # noqa F404
 from .brainco_dinov2 import BraincoDINOv2Module  # noqa F405
 from .multi_sensor_dinov2 import MultiSensorDINOv2Module  # noqa F406
 from .angle_dinov2 import AngleDinov2Module  # noqa F407
+from .finger_angle_dinov2 import FingerAngleDinov2Module  # noqa F408
