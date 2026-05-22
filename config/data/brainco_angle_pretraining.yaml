@@ -1,0 +1,39 @@
+train_dataloader:
+  batch_size: 128
+  num_workers: 4
+  shuffle: true
+  drop_last: true
+  pin_memory: true
+  persistent_workers: true
+
+val_dataloader:
+  batch_size: 128
+  num_workers: 4
+  shuffle: false
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+normalization:
+  mean: null  # populated at runtime by get_dataloaders_brainco_angle_based()
+  std: null
+
+sensor: brainco_angle_vector
+
+window_time: 0.01   # 3 frames at 100 Hz → sequence_length=3
+window_overlap: 0.0
+interpolating_freq: 100
+
+dataset_list:
+  - type: teleop
+    sequence_list:
+      - towel
+    train_dataset_ids: [0]
+    val_dataset_ids: [0]
+    dataset:
+      _target_: tactile_ssl.data.brainco_angle_tactile.BraincoAngleTactileDataset
+      config:
+        window_time: ${data.window_time}
+        window_overlap: ${data.window_overlap}
+        interpolating_freq: ${data.interpolating_freq}
+      data_path: dataset/brainco/pretraining

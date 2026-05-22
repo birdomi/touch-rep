@@ -1,22 +1,22 @@
 # @package _global_
 
 defaults:
-  - override /data: gigahands_oakinkv2
+  - override /data: oakinkv2_arctic_taco_hot3d
   - override /algorithm: angle_dinov2
   - _self_
 
 model_size: tiny
-experiment_name: dinov2_gigahands_oakinkv2_${model_size}
+experiment_name: dinov2_all_${model_size}
 ckpt_path: ./
 
 wandb:
   entity: ryk9012-gwangju-institute-of-science-and-technology
-  project: gigahands_dinov2
-  group: dino_gigahands_oakinkv2_${model_size}
-  tags: ["gigahands", "oakinkv2", "${model_size}"]
+  project: dinov2
+  group: dino_all_${model_size}
+  tags: ["all", "oakinkv2", "arctic", "taco", "hot3d", "${model_size}"]
 
 trainer:
-  max_epochs: 100
+  max_epochs: 200
   validation_frequency: 50
 
 algorithm:
@@ -27,8 +27,8 @@ algorithm:
     in_chans: 1             # contact channel
     pos_in_dim: 10          # 5 lh + 5 rh fingers (angle stream)
     pos_in_chans: 4         # angle values per finger
-    sequence_length: 3
-    time_chunk_size: 3
+    sequence_length: 1
+    time_chunk_size: 1
     num_register_tokens: 1
     pos_embed_fn: learned
     with_masktoken: True

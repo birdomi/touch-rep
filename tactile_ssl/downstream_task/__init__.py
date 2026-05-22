@@ -20,3 +20,5 @@ except Exception:
 from .multi_sensor_grasp_sl import MultiSensorGraspDetectionSLModule
 
 from .brainco_cat_grasp_sl import BraincoCatGraspDetectionSLModule
+
+from .brainco_angle_grasp_sl import BraincoAngleGraspSLModule

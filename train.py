@@ -841,30 +841,26 @@ def get_dataloaders_gigahands_based(cfg: DictConfig):
     return train_dset, val_dset
 
 
-def get_dataloaders_hot3d_vector_based(cfg: DictConfig):
-    """Load HOT3D angle+contact vector dataset for AngleDinov2Module pretraining.
-
-    Returns train/val datasets with:
-      sensor_mean/std : (1,)  — joint_contact normalization stats
-      (finger_angles are NOT normalized — raw angle values are fed directly)
-    """
-    from tactile_ssl.data.angle_tactile import Hot3DAngleTactileDataset
+def _build_angle_vector_dataset(cfg: DictConfig, data_root: str):
+    """Build train/val AngleTactileDataset pair for a single dataset root."""
+    from tactile_ssl.data.angle_tactile import AngleTactileDataset
 
     data_cfg = cfg.data
     kwargs = dict(
-        data_root=str(data_cfg.get("data_root", "pretraining_dataset/vectors/hot3d")),
+        data_root=data_root,
         window_size=int(data_cfg.get("window_size", 1)),
         window_stride=int(data_cfg.get("window_stride", 1)),
         train_val_split=float(data_cfg.get("train_val_split", 0.9)),
     )
+    train_ds = AngleTactileDataset(split="train", **kwargs)
+    val_ds   = AngleTactileDataset(split="val",   **kwargs)
+    return train_ds, val_ds, kwargs
 
-    train_ds = Hot3DAngleTactileDataset(split="train", **kwargs)
-    val_ds   = Hot3DAngleTactileDataset(split="val",   **kwargs)
 
-    # ── Contact normalization stats (C=1, all joints + all frames) ────────────
-    logger.info("Computing HOT3D contact normalization stats...")
+def _compute_contact_stats(sequences):
+    """Compute mean/std of joint_contact channel over a list of sequences."""
     contact_chunks = []
-    for seq in train_ds._sequences:
+    for seq in sequences:
         contact_chunks.append(seq.lh_contact.reshape(-1))
         contact_chunks.append(seq.rh_contact.reshape(-1))
     if contact_chunks:
@@ -874,6 +870,20 @@ def get_dataloaders_hot3d_vector_based(cfg: DictConfig):
         contact_std  = contact_std if contact_std > 1e-6 else 1.0
     else:
         contact_mean, contact_std = 0.0, 1.0
+    return contact_mean, contact_std
+
+
+def _make_angle_vector_dataloaders(cfg: DictConfig, data_root: str, name: str):
+    """Generic angle+contact vector loader for HOT3D / ARCTIC / TACO / OAKINKV2.
+
+    Returns train/val datasets with:
+      sensor_mean/std : (1,)  — joint_contact normalization stats
+      (finger_angles are NOT normalized — raw angle values are fed directly)
+    """
+    train_ds, val_ds, kwargs = _build_angle_vector_dataset(cfg, data_root)
+
+    logger.info(f"Computing {name} contact normalization stats...")
+    contact_mean, contact_std = _compute_contact_stats(train_ds._sequences)
     logger.info(f"  contact  mean={contact_mean:.6f}  std={contact_std:.6f}")
     logger.info("  angle    normalization skipped (raw values used)")
 
@@ -889,10 +899,81 @@ def get_dataloaders_hot3d_vector_based(cfg: DictConfig):
         ds.sensor_std  = sensor_std
 
     logger.info(
-        f"HOT3D vector: {len(train_ds)} train windows, "
+        f"{name} vector: {len(train_ds)} train windows, "
         f"{len(val_ds)} val windows  (window_size={kwargs['window_size']})"
     )
     return train_ds, val_ds
+
+
+def get_dataloaders_hot3d_vector_based(cfg: DictConfig):
+    data_root = str(cfg.data.get("data_root", "pretraining_dataset/vector_dataset/HOT3D/hot3d"))
+    return _make_angle_vector_dataloaders(cfg, data_root, "HOT3D")
+
+
+def get_dataloaders_arctic_vector_based(cfg: DictConfig):
+    data_root = str(cfg.data.get("data_root", "pretraining_dataset/vector_dataset/ARCTIC"))
+    return _make_angle_vector_dataloaders(cfg, data_root, "ARCTIC")
+
+
+def get_dataloaders_taco_vector_based(cfg: DictConfig):
+    data_root = str(cfg.data.get("data_root", "pretraining_dataset/vector_dataset/TACO"))
+    return _make_angle_vector_dataloaders(cfg, data_root, "TACO")
+
+
+def get_dataloaders_oakinkv2_vector_based(cfg: DictConfig):
+    data_root = str(cfg.data.get("data_root", "pretraining_dataset/vector_dataset/OAKINKV2"))
+    return _make_angle_vector_dataloaders(cfg, data_root, "OAKINKV2")
+
+
+def get_dataloaders_all_vector_based(cfg: DictConfig):
+    """Concatenate HOT3D + ARCTIC + TACO + OAKINKV2 angle+contact vector datasets.
+
+    Contact normalization stats are computed jointly over all training sequences.
+    """
+    data_cfg = cfg.data
+    paths = [
+        ("HOT3D",    str(data_cfg.get("hot3d_data_root",    "pretraining_dataset/vector_dataset/HOT3D/hot3d"))),
+        ("ARCTIC",   str(data_cfg.get("arctic_data_root",   "pretraining_dataset/vector_dataset/ARCTIC"))),
+        ("TACO",     str(data_cfg.get("taco_data_root",     "pretraining_dataset/vector_dataset/TACO"))),
+        ("OAKINKV2", str(data_cfg.get("oakinkv2_data_root", "pretraining_dataset/vector_dataset/OAKINKV2"))),
+    ]
+
+    train_dsets, val_dsets, all_train_seqs = [], [], []
+    for name, path in paths:
+        logger.info(f"Loading {name} from {path}")
+        tr, va, _ = _build_angle_vector_dataset(cfg, path)
+        train_dsets.append(tr)
+        val_dsets.append(va)
+        all_train_seqs.extend(tr._sequences)
+        logger.info(f"  {name}: train={len(tr)} val={len(va)}")
+
+    logger.info("Computing combined contact normalization stats...")
+    contact_mean, contact_std = _compute_contact_stats(all_train_seqs)
+    logger.info(f"  contact  mean={contact_mean:.6f}  std={contact_std:.6f}")
+    logger.info("  angle    normalization skipped (raw values used)")
+
+    sensor_mean = [contact_mean]
+    sensor_std  = [contact_std]
+
+    with open_dict(cfg):
+        cfg.data.normalization.mean = sensor_mean
+        cfg.data.normalization.std  = sensor_std
+
+    for ds in train_dsets + val_dsets:
+        ds.sensor_mean = sensor_mean
+        ds.sensor_std  = sensor_std
+
+    train_dset = data.ConcatDataset(train_dsets)
+    val_dset   = data.ConcatDataset(val_dsets)
+    train_dset.sensor_mean = sensor_mean
+    train_dset.sensor_std  = sensor_std
+    val_dset.sensor_mean   = sensor_mean
+    val_dset.sensor_std    = sensor_std
+
+    logger.info(
+        f"ALL vector: {len(train_dset)} train windows, {len(val_dset)} val windows"
+    )
+    return train_dset, val_dset
 
 
 def get_dataloaders_brainco_based(cfg: DictConfig):
@@ -1036,6 +1117,105 @@ def get_dataloaders_brainco_based(cfg: DictConfig):
     #     val_dset.pos_mean = pos_mean
     #     val_dset.pos_std  = pos_std
 
+    return train_dset, val_dset
+
+
+def get_dataloaders_brainco_angle_based(cfg: DictConfig):
+    """Load BrainCo angle+tactile dataset for AngleDinov2Module pretraining.
+
+    Returns train/val datasets whose items contain:
+      joint_contact : (W, 10, 4)  — raw 4-channel tactile (BraincoAngleTactileDataset)
+      finger_angles : (W, 10, 4)  — per-finger angle encoding
+
+    Per-channel normalization stats are computed over training data and stored
+    in cfg.data.normalization and as sensor_mean/sensor_std on the dataset objects.
+    """
+    data_cfg = cfg.data
+
+    train_datasets, val_datasets = [], []
+    object_classes = []
+    object_class_sizes = []
+
+    for dataset_l in data_cfg.dataset_list:
+        if dataset_l.type != "teleop":
+            continue
+        train_ids = dataset_l.get("train_dataset_ids", [])
+        val_ids   = dataset_l.get("val_dataset_ids", [])
+
+        for obj in dataset_l.get("sequence_list", []):
+            object_classes.append(obj)
+            object_class_sizes.append(0)
+            obj_class_idx = len(object_classes) - 1
+
+            for ep in train_ids:
+                ep_str    = f"episode_{int(ep):04d}"
+                full_path = f"{dataset_l.dataset.data_path}/{obj}/{ep_str}"
+                if not os.path.exists(full_path):
+                    logger.warning(f"BrainCo angle path not found: {full_path}")
+                    continue
+                ds = hydra.utils.instantiate(
+                    dataset_l.dataset, data_path=full_path, object_class=obj_class_idx
+                )
+                object_class_sizes[-1] += len(ds)
+                train_datasets.append(ds)
+
+            for ep in val_ids:
+                ep_str    = f"episode_{int(ep):04d}"
+                full_path = f"{dataset_l.dataset.data_path}/{obj}/{ep_str}"
+                if not os.path.exists(full_path):
+                    continue
+                ds = hydra.utils.instantiate(
+                    dataset_l.dataset, data_path=full_path, object_class=obj_class_idx
+                )
+                val_datasets.append(ds)
+
+    if not train_datasets:
+        raise ValueError("No training datasets loaded for brainco_angle_vector sensor.")
+
+    train_dset = data.ConcatDataset(train_datasets) if len(train_datasets) > 1 else train_datasets[0]
+    val_dset   = data.ConcatDataset(val_datasets)   if val_datasets else None
+
+    # ── Compute per-channel tactile normalization stats ───────────────────────
+    logger.info("Computing BrainCo angle tactile normalization stats...")
+    tactile_chunks = []
+    for ds in train_datasets:
+        inner = ds.dataset if hasattr(ds, "dataset") else ds
+        if hasattr(inner, "tactile_array"):
+            tactile_chunks.append(inner.tactile_array.reshape(-1, 4).astype(np.float32))
+
+    if tactile_chunks:
+        combined = np.concatenate(tactile_chunks, axis=0)  # (N, 4)
+        sensor_mean, sensor_std = [], []
+        for c in range(combined.shape[-1]):
+            ch    = combined[:, c]
+            valid = ch[ch >= 0] if c == 2 else ch   # ch2: -1 = invalid sentinel
+            if valid.size == 0:
+                sensor_mean.append(0.0)
+                sensor_std.append(1.0)
+            else:
+                sensor_mean.append(float(np.mean(valid)))
+                sensor_std.append(float(max(np.std(valid), 1e-6)))
+    else:
+        sensor_mean = [0.0] * 4
+        sensor_std  = [1.0] * 4
+
+    logger.info(f"  tactile mean={sensor_mean}")
+    logger.info(f"  tactile std ={sensor_std}")
+
+    with open_dict(cfg):
+        cfg.data.normalization.mean = sensor_mean
+        cfg.data.normalization.std  = sensor_std
+
+    train_dset.sensor_mean = sensor_mean
+    train_dset.sensor_std  = sensor_std
+    if val_dset is not None:
+        val_dset.sensor_mean = sensor_mean
+        val_dset.sensor_std  = sensor_std
+
+    logger.info(
+        f"BrainCo angle: {len(train_dset)} train windows, "
+        f"{len(val_dset) if val_dset else 0} val windows"
+    )
     return train_dset, val_dset
 
 
@@ -1261,8 +1441,23 @@ def get_dataloaders(cfg: DictConfig):
     elif cfg.data.sensor == "hot3d_vector":
         train_dset, val_dset = get_dataloaders_hot3d_vector_based(cfg)
         sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
+    elif cfg.data.sensor == "arctic_vector":
+        train_dset, val_dset = get_dataloaders_arctic_vector_based(cfg)
+        sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
+    elif cfg.data.sensor == "taco_vector":
+        train_dset, val_dset = get_dataloaders_taco_vector_based(cfg)
+        sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
+    elif cfg.data.sensor == "oakinkv2_vector":
+        train_dset, val_dset = get_dataloaders_oakinkv2_vector_based(cfg)
+        sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
+    elif cfg.data.sensor == "all_vector":
+        train_dset, val_dset = get_dataloaders_all_vector_based(cfg)
+        sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
     elif cfg.data.sensor == "brainco":
         train_dset, val_dset = get_dataloaders_brainco_based(cfg)
+        sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
+    elif cfg.data.sensor == "brainco_angle_vector":
+        train_dset, val_dset = get_dataloaders_brainco_angle_based(cfg)
         sensor_means, sensor_stds = train_dset.sensor_mean, train_dset.sensor_std
     elif cfg.data.sensor == "brainco_xela":
         train_dset, val_dset, train_sampler = get_dataloaders_brainco_xela_based(cfg)

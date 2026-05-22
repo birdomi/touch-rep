@@ -1,36 +1,39 @@
 # @package _global_
 
 defaults:
-  - override /data: brainco_pretraining
-  - override /algorithm: gigahands_dinov2
+  - override /data: brainco_angle_pretraining
+  - override /algorithm: angle_dinov2
   - _self_
 
 model_size: tiny
-experiment_name: dinov2_ours_brainco_${model_size}
+experiment_name: dinov2_brainco_angle_${model_size}
 ckpt_path: ./
 
 wandb:
   entity: ryk9012-gwangju-institute-of-science-and-technology
-  project: gigahands_dinov2
-  group: dino_gigahands_oakinkv2_${model_size}
-  tags: ["gigahands", "oakinkv2", "${model_size}"]
+  project: dinov2
+  group: dino_brainco_angle_${model_size}
+  tags: ["brainco", "angle", "${model_size}"]
 
 trainer:
-  max_epochs: 500
+  max_epochs: 5000
   validation_frequency: 50
 
 algorithm:
+  classification_loss: false   # BraincoAngleTactileDataset has no classification_id
   centering: centering
   encoder:
-    _target_: tactile_ssl.model.multi_sensor_tiny
-    in_dim: 42              # 21 lh + 21 rh keypoints
-    in_chans: 4             
-    sequence_length: 3
-    time_chunk_size: 3
+    _target_: tactile_ssl.model.angle_tiny
+    in_dim: 10              # 10 tactile sensors (5 lh + 5 rh)
+    in_chans: 4             # 4-channel tactile (normal, tangential, direction, proximity)
+    pos_in_dim: 10          # 5 lh + 5 rh fingers (angle stream)
+    pos_in_chans: 4         # [abduction, MCP, PIP, DIP]
+    sequence_length: 1      # 3 frames @ 100 Hz = window_time 0.03s
+    time_chunk_size: 1
     num_register_tokens: 1
     pos_embed_fn: learned
-    with_masktoken: True
+    with_masktoken: true
     drop_path_rate: 0.3
-    drop_path_uniform: True
+    drop_path_uniform: true
     normalization: ${data.normalization}
-    causal: False
+    causal: false

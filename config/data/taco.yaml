@@ -1,5 +1,5 @@
 train_dataloader:
-  batch_size: 128
+  batch_size: 512
   num_workers: 8
   shuffle: true
   drop_last: true
@@ -15,12 +15,12 @@ val_dataloader:
   persistent_workers: true
 
 normalization:
-  mean: null   # populated at runtime by the dataloader setup
+  mean: null   # populated at runtime by get_dataloaders_taco_vector_based()
   std: null
 
-sensor: taco
+sensor: taco_vector
 
-data_root: pretraining_dataset/TACO
-window_size: 3
-window_stride: 3
+data_root: pretraining_dataset/vector_dataset/TACO
+window_size: 1
+window_stride: 1
 train_val_split: 1.0

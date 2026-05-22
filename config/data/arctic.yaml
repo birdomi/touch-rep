@@ -15,12 +15,12 @@ val_dataloader:
   persistent_workers: true
 
 normalization:
-  mean: null   # populated at runtime by get_dataloaders_gigahands_based()
+  mean: null   # populated at runtime by get_dataloaders_arctic_vector_based()
   std: null
 
-sensor: oakinkv2
+sensor: arctic_vector
 
-data_root: pretraining_dataset/Arctic
-window_size: 3
-window_stride: 3
+data_root: pretraining_dataset/vector_dataset/ARCTIC
+window_size: 1
+window_stride: 1
 train_val_split: 1.0

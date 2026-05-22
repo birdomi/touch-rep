@@ -2,7 +2,7 @@
 
 defaults:
   - override /data: brainco_xela_multi
-  - override /algorithm: multi_sensor_dinov2
+  - override /algorithm: angle_dinov2
   - _self_
 
 model_size: tiny
@@ -22,11 +22,13 @@ trainer:
 algorithm:
   centering: centering
   encoder:
-    _target_: tactile_ssl.model.multi_sensor_tiny
-    in_dim: 10              # 센서 수 (손가락)
-    in_chans: 4             # BrainCo 채널 수
-    sequence_length: 3     # T=3: 0.1s @ 30 Hz
-    time_chunk_size: 3      # 3 // 3 = 1 temporal chunks per sensor
+    _target_: tactile_ssl.model.angle_tiny
+    in_dim: 42              # 21 lh + 21 rh joints (contact stream)
+    in_chans: 1             # contact channel
+    pos_in_dim: 10          # 5 lh + 5 rh fingers (angle stream)
+    pos_in_chans: 4         # angle values per finger
+    sequence_length: 3
+    time_chunk_size: 3
     num_register_tokens: 1
     pos_embed_fn: learned
     with_masktoken: True

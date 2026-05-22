@@ -28,6 +28,13 @@ from .layers import NestedTensorBlock as Block
 
 log = get_pylogger(__name__)
 
+# Full skeleton layout (42 joints) — same as MultiSensorTransformer
+# Fingertip touch-link indices where tactile sensors are physically placed
+# Left hand:  thumb=4, index=8,  middle=12, ring=16, pinky=20
+# Right hand: thumb=25,index=29, middle=33, ring=37, pinky=41
+FULL_SKELETON_SIZE = 42
+TACTILE_SENSOR_IDXS = [4, 8, 12, 16, 20, 25, 29, 33, 37, 41]
+
 
 def _make_embed1d(in_chans: int, seq_len: int, chunk_size: int, embed_dim: int) -> PatchEmbed1d:
     return PatchEmbed1d(
@@ -88,6 +95,7 @@ class AngleTransformer(SignalTransformer):
         drop_path_rate: float = 0.0,
         drop_path_uniform: bool = False,
         with_masktoken: bool = False,
+        use_null_token: bool = False,
         causal: bool = False,
         pre_fusion_depth: Optional[int] = None,
         normalization: Optional[DictConfig] = None,
@@ -97,6 +105,10 @@ class AngleTransformer(SignalTransformer):
         )
         assert in_dim % 2 == 0, f"in_dim({in_dim}) must be even (left/right hand)"
         assert pos_in_dim % 2 == 0, f"pos_in_dim({pos_in_dim}) must be even (left/right hand)"
+
+        self.use_null_token = use_null_token
+        if use_null_token:
+            with_masktoken = True
 
         super().__init__(
             in_dim=in_dim,
@@ -180,7 +192,8 @@ class AngleTransformer(SignalTransformer):
         log.info(
             f"AngleTransformer: T={seq}, chunk={chunk}, num_chunks={num_chunks}, "
             f"N_contact={in_dim}, N_angles={pos_in_dim}, "
-            f"pre_fusion_depth={self.pre_fusion_depth}, embed_dim={D}"
+            f"pre_fusion_depth={self.pre_fusion_depth}, embed_dim={D}, "
+            f"use_null_token={self.use_null_token}"
         )
 
     # ── helpers ───────────────────────────────────────────────────────────────
@@ -198,6 +211,33 @@ class AngleTransformer(SignalTransformer):
         lh = per_hand[0].float() + h[0]           # (N//2, D)
         rh = per_hand[1].float() + h[1]           # (N//2, D)
         return torch.cat([lh, rh], dim=0)         # (N, D)
+
+    # ── null token expansion ──────────────────────────────────────────────────
+
+    def expand_to_skeleton(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Expand tactile-only contact input to full skeleton space.
+
+        Args:
+            x: (B, T, 10, C)  — tactile contact for the 10 fingertips
+
+        Returns:
+            x_full        : (B, T, 42, C)   — zeros at non-tactile positions
+            masktoken_mask: (1, B, 42) bool  — True = null position (no sensor)
+        """
+        B, T, N, C = x.shape
+        assert N == len(TACTILE_SENSOR_IDXS), (
+            f"Expected {len(TACTILE_SENSOR_IDXS)} tactile sensors, got {N}"
+        )
+        x_full = torch.zeros(B, T, FULL_SKELETON_SIZE, C, device=x.device, dtype=x.dtype)
+        x_full[:, :, TACTILE_SENSOR_IDXS, :] = x
+
+        null_mask = torch.ones(B, FULL_SKELETON_SIZE, dtype=torch.bool, device=x.device)
+        null_mask[:, TACTILE_SENSOR_IDXS] = False
+        masktoken_mask = null_mask.unsqueeze(0)  # (1, B, 42)
+
+        return x_full, masktoken_mask
 
     # ── normalization ─────────────────────────────────────────────────────────
 
@@ -367,6 +407,14 @@ class AngleTransformer(SignalTransformer):
               x_prenorm          : (B_eff, num_patches, D)
               x_tokens           : (B_eff, reg+patches, D)
         """
+        # --- null token expansion: (B,T,10,C) → (B,T,42,C) + mask -----------
+        if self.use_null_token:
+            x, null_mask = self.expand_to_skeleton(x)
+            if masktoken_masks is None:
+                masktoken_masks = null_mask
+            else:
+                masktoken_masks = masktoken_masks | null_mask
+
         # --- embed streams ---------------------------------------------------
         x   = self.pre_sensor_embed(x)
         pos = self.pre_pos_embed(pos)

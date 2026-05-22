@@ -1,0 +1,32 @@
+train_dataloader:
+  batch_size: 32
+  num_workers: 4
+  shuffle: true
+  drop_last: true
+  pin_memory: true
+  persistent_workers: true
+
+val_dataloader:
+  batch_size: 32
+  num_workers: 4
+  shuffle: false
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+sensor: brainco_angle_object_classification
+train_val_split: 0.8
+
+window_time: 0.6
+window_overlap: 0.0
+interpolating_freq: 100
+
+dataset:
+  _target_: tactile_ssl.data.brainco_angle_object_classification_dataset.BraincoAngleObjectClassificationDataset
+  config:
+    window_time: ${data.window_time}
+    window_overlap: ${data.window_overlap}
+    interpolating_freq: ${data.interpolating_freq}
+    subtract_baseline: true
+  data_path: pretraining_dataset/brainco
+  # classes: [basket, box, doll, hammer, pot, towel]  # 생략 시 자동 감지
