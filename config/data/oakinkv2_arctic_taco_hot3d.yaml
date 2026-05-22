@@ -1,5 +1,5 @@
 train_dataloader:
-  batch_size: 128
+  batch_size: 512
   num_workers: 8
   shuffle: true
   drop_last: true
@@ -15,16 +15,15 @@ val_dataloader:
   persistent_workers: true
 
 normalization:
-  mean: null   # populated at runtime by get_dataloaders_gigahands_based()
+  mean: null   # populated at runtime by get_dataloaders_all_vector_based()
   std: null
 
-sensor: oakinkv2_arctic_taco_hot3d
+sensor: all_vector
 
-oakinkv2_data_root: pretraining_dataset/OakInkv2
-arctic_data_root: pretraining_dataset/Arctic
-taco_data_root: pretraining_dataset/TACO
-hot3d_data_root: pretraining_dataset/hot3d
-window_size: 3
-window_stride: 3
+oakinkv2_data_root: pretraining_dataset/vector_dataset/OAKINKV2
+arctic_data_root: pretraining_dataset/vector_dataset/ARCTIC
+taco_data_root: pretraining_dataset/vector_dataset/TACO
+hot3d_data_root: pretraining_dataset/vector_dataset/HOT3D/hot3d
+window_size: 1
+window_stride: 1
 train_val_split: 1.0
-scenes: null

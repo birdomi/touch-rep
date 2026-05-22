@@ -20,7 +20,7 @@ normalization:
 
 sensor: hot3d_vector
 
-data_root: pretraining_dataset/vectors/hot3d
+data_root: pretraining_dataset/vector_dataset/HOT3D/hot3d
 window_size: 1
 window_stride: 1
 train_val_split: 1.0

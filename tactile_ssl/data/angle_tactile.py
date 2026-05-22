@@ -13,8 +13,8 @@ log = get_pylogger(__name__)
 _FINGERTIP_INDICES = [4, 8, 12, 16, 20]  # MediaPipe fingertip joint indices
 
 
-class _Hot3DSequenceData:
-    """Loaded HOT3D sequence with angle and contact data."""
+class _AngleSequenceData:
+    """Loaded sequence with angle and contact data."""
 
     __slots__ = ("rh_angles", "lh_angles", "rh_contact", "lh_contact")
 
@@ -31,7 +31,7 @@ class _Hot3DSequenceData:
         self.lh_contact = lh_contact
 
 
-def _load_hot3d_sequence(path: Path) -> _Hot3DSequenceData:
+def _load_angle_sequence(path: Path) -> _AngleSequenceData:
     with open(path, "rb") as f:
         raw = pickle.load(f)
 
@@ -49,7 +49,7 @@ def _load_hot3d_sequence(path: Path) -> _Hot3DSequenceData:
         rh_contact[i] = frame["rh_contact"]
         lh_contact[i] = frame["lh_contact"]
 
-    return _Hot3DSequenceData(
+    return _AngleSequenceData(
         rh_angles=rh_angles,
         lh_angles=lh_angles,
         rh_contact=rh_contact,
@@ -57,22 +57,23 @@ def _load_hot3d_sequence(path: Path) -> _Hot3DSequenceData:
     )
 
 
-class Hot3DAngleTactileDataset(data.Dataset):
-    """HOT3D hand angle + contact pretraining dataset.
+class AngleTactileDataset(data.Dataset):
+    """Generic hand angle + contact pretraining dataset.
 
-    데이터 경로: pretraining_dataset/vectors/hot3d/
-    파일 포맷:  <participant>_<hash>_seg<NNN>.pkl
+    파일 포맷 (pkl): {frame_idx: {rh_angles, lh_angles, rh_contact, lh_contact, ...}}
 
     각 프레임:
         rh_angles  (5, 4)  — 오른손 5개 손가락 각도
         lh_angles  (5, 4)  — 왼손 5개 손가락 각도
         rh_contact (21, 1) — 오른손 21개 관절 contact
         lh_contact (21, 1) — 왼손 21개 관절 contact
+
+    HOT3D, ARCTIC, TACO, OAKINKV2 데이터셋이 동일한 포맷을 공유한다.
     """
 
     def __init__(
         self,
-        data_root: str = "pretraining_dataset/vectors/hot3d",
+        data_root: str = "pretraining_dataset/vector_dataset/HOT3D/hot3d",
         **kwargs,
     ):
         self.window_size = int(kwargs.pop("window_size", 3))
@@ -100,10 +101,10 @@ class Hot3DAngleTactileDataset(data.Dataset):
             pkl_files = val_files
         log.info(f"  {split}: {len(pkl_files)} files")
 
-        self._sequences: List[_Hot3DSequenceData] = []
+        self._sequences: List[_AngleSequenceData] = []
         self._seq_paths: List[Path] = []
         for p in pkl_files:
-            self._sequences.append(_load_hot3d_sequence(p))
+            self._sequences.append(_load_angle_sequence(p))
             self._seq_paths.append(p)
         log.info(f"  Loaded {len(self._sequences)} sequences")
 
@@ -187,3 +188,6 @@ class Hot3DAngleTactileDataset(data.Dataset):
             "joint_contact": torch.from_numpy(joint_contact).float(),
             "classification_id": torch.tensor(self.window_labels[idx], dtype=torch.long),
         }
+
+
+Hot3DAngleTactileDataset = AngleTactileDataset

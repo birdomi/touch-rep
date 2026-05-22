@@ -1,5 +1,5 @@
 train_dataloader:
-  batch_size: 128
+  batch_size: 512
   num_workers: 8
   shuffle: true
   drop_last: true
@@ -15,12 +15,12 @@ val_dataloader:
   persistent_workers: true
 
 normalization:
-  mean: null   # populated at runtime by get_dataloaders_gigahands_based()
+  mean: null   # populated at runtime by get_dataloaders_oakinkv2_vector_based()
   std: null
 
-sensor: oakinkv2
+sensor: oakinkv2_vector
 
-data_root: pretraining_dataset/OakInkv2
-window_size: 3
-window_stride: 3
+data_root: pretraining_dataset/vector_dataset/OAKINKV2
+window_size: 1
+window_stride: 1
 train_val_split: 1.0

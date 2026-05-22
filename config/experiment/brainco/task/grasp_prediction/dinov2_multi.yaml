@@ -17,4 +17,6 @@ fold: 0       # 0-indexed fold to use as validation set
 num_folds: 5  # 5-fold → 80% train / 20% val by episode
 
 task:
-  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_multi_sensor_brainco_tiny/epoch-0300.ckpt
+  # checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_multi_sensor_brainco_tiny/epoch-0300.ckpt
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_multi_sensor_brainco_tiny/epoch-5000-brainco.ckpt
+

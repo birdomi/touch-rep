@@ -2,7 +2,7 @@
 
 defaults:
   - override /data: taco
-  - override /algorithm: gigahands_dinov2
+  - override /algorithm: angle_dinov2
   - _self_
 
 model_size: tiny
@@ -12,21 +12,23 @@ ckpt_path: ./
 wandb:
   entity: ryk9012-gwangju-institute-of-science-and-technology
   project: dinov2
-  group: dino_oakinkv2_${model_size}
-  tags: ["gigahands", "oakinkv2", "${model_size}"]
+  group: dino_taco_${model_size}
+  tags: ["taco", "${model_size}"]
 
 trainer:
-  max_epochs: 300
+  max_epochs: 200
   validation_frequency: 50
 
 algorithm:
   centering: centering
   encoder:
-    _target_: tactile_ssl.model.multi_sensor_tiny
-    in_dim: 42              # 21 lh + 21 rh keypoints
-    in_chans: 1             # contact channel only
-    sequence_length: 3
-    time_chunk_size: 3
+    _target_: tactile_ssl.model.angle_tiny
+    in_dim: 42              # 21 lh + 21 rh joints (contact stream)
+    in_chans: 1             # contact channel
+    pos_in_dim: 10          # 5 lh + 5 rh fingers (angle stream)
+    pos_in_chans: 4         # angle values per finger
+    sequence_length: 1
+    time_chunk_size: 1
     num_register_tokens: 1
     pos_embed_fn: learned
     with_masktoken: True

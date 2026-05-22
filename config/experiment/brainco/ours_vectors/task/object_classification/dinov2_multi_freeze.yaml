@@ -6,7 +6,7 @@ defaults:
 
 ssl_name: dinov2
 sensor: brainco_angle
-experiment_name: angle_object_classification_multi_pretrained
+experiment_name: angle_object_classification_multi_pretrained_freeze
 ckpt_path: ./
 
 resume_id: ~
@@ -19,12 +19,12 @@ num_folds: 4
 wandb:
   entity: ryk9012-gwangju-institute-of-science-and-technology
   project: brainco_angle_object_classification
-  group: angle_oc_multi_pretrained
-  tags: ["angle", "object_classification", "pretrained", "multi"]
+  group: angle_oc_multi_pretrained_freeze
+  tags: ["angle", "object_classification", "pretrained", "multi", "freeze"]
 
 task:
   checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_multi_sensor_pretrained/epoch-0150-all-cls.ckpt
-  train_encoder: true
+  train_encoder: false
   model_encoder:
     in_dim: 42
     use_null_token: true
