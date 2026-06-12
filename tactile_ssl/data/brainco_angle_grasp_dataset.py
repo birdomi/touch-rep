@@ -32,6 +32,22 @@ log = get_pylogger(__name__)
 _CLASS_DIRS = {"grasp_success": 1, "grasp_fail": 0}
 
 
+def _get_class_dirs(label_dirs):
+    return [(str(name), int(label)) for name, label in label_dirs.items()]
+
+
+def _get_data_roots(config: DictConfig, data_path: str):
+    data_roots = config.get("data_roots")
+    if data_roots:
+        roots = []
+        for root_cfg in data_roots:
+            label_dirs = root_cfg.get("label_dirs", config.get("label_dirs", _CLASS_DIRS))
+            roots.append((Path(str(root_cfg.data_path)), _get_class_dirs(label_dirs)))
+        return roots
+
+    return [(Path(data_path), _get_class_dirs(config.get("label_dirs", _CLASS_DIRS)))]
+
+
 class BraincoAngleGraspDataset(data.Dataset):
     """Grasp success/fail dataset using angle + contact inputs.
 
@@ -54,96 +70,97 @@ class BraincoAngleGraspDataset(data.Dataset):
         self.shift_per_window = max(1, shift)
         self.subtract_baseline = bool(config.get("subtract_baseline", False))
 
-        root = Path(data_path)
         self.episode_data: list = []
         self.windows:      list = []
 
-        for class_name, label in _CLASS_DIRS.items():
-            class_dir = root / class_name
-            if not class_dir.exists():
-                log.warning(f"  {class_dir} not found — skipping")
-                continue
-
-            ep_dirs = sorted(d for d in class_dir.iterdir() if d.is_dir())
-            log.info(f"  {class_name}: {len(ep_dirs)} episodes")
-
-            for ep_dir in ep_dirs:
-                data_json = ep_dir / "data.json"
-                if not data_json.exists():
+        for root, class_dirs in _get_data_roots(config, data_path):
+            log.info(f"Loading grasp episodes from: {root}")
+            for class_name, label in class_dirs:
+                class_dir = root / class_name
+                if not class_dir.exists():
+                    log.warning(f"  {class_dir} not found — skipping")
                     continue
 
-                with open(data_json) as f:
-                    raw = json.load(f)
-                frames = raw["data"]
-                n      = len(frames)
+                ep_dirs = sorted(d for d in class_dir.iterdir() if d.is_dir())
+                log.info(f"  {class_name}: {len(ep_dirs)} episodes")
 
-                if n < self.num_frames_per_window:
-                    log.warning(
-                        f"  Skipping {ep_dir.name}: {n} frames < "
-                        f"window size {self.num_frames_per_window}"
-                    )
-                    continue
+                for ep_dir in ep_dirs:
+                    data_json = ep_dir / "data.json"
+                    if not data_json.exists():
+                        continue
 
-                # ── Tactile ──────────────────────────────────────────────────
-                tactile_list = []
-                for frame in frames:
-                    info = frame["tactiles"]
-                    if isinstance(info["left_ee"], str):
-                        lh = np.load(str(ep_dir / info["left_ee"])).reshape(-1, 4)
-                    else:
-                        lh = np.array(info["left_ee"], dtype=np.float32).reshape(-1, 4)
-                    if isinstance(info["right_ee"], str):
-                        rh = np.load(str(ep_dir / info["right_ee"])).reshape(-1, 4)
-                    else:
-                        rh = np.array(info["right_ee"], dtype=np.float32).reshape(-1, 4)
-                    tactile_list.append(np.concatenate([lh, rh], axis=0))  # (10, 4)
+                    with open(data_json) as f:
+                        raw = json.load(f)
+                    frames = raw["data"]
+                    n      = len(frames)
 
-                tactile = np.array(tactile_list, dtype=np.float32)          # (N, 10, 4)
-                tactile[..., 2][tactile[..., 2] == 65535] = -1.0
+                    if n < self.num_frames_per_window:
+                        log.warning(
+                            f"  Skipping {ep_dir.name}: {n} frames < "
+                            f"window size {self.num_frames_per_window}"
+                        )
+                        continue
 
-                if self.subtract_baseline:
-                    baseline = tactile[0].copy()                             # (10, 4)
-                    valid_t  = tactile >= 0
-                    valid_b  = baseline >= 0
-                    sub_mask = valid_t & valid_b[np.newaxis]
-                    tactile[sub_mask] -= np.broadcast_to(baseline, tactile.shape)[sub_mask]
+                    # ── Tactile ──────────────────────────────────────────────────
+                    tactile_list = []
+                    for frame in frames:
+                        info = frame["tactiles"]
+                        if isinstance(info["left_ee"], str):
+                            lh = np.load(str(ep_dir / info["left_ee"])).reshape(-1, 4)
+                        else:
+                            lh = np.array(info["left_ee"], dtype=np.float32).reshape(-1, 4)
+                        if isinstance(info["right_ee"], str):
+                            rh = np.load(str(ep_dir / info["right_ee"])).reshape(-1, 4)
+                        else:
+                            rh = np.array(info["right_ee"], dtype=np.float32).reshape(-1, 4)
+                        tactile_list.append(np.concatenate([lh, rh], axis=0))  # (10, 4)
 
-                max_vals = np.array(_TACTILE_MAX, dtype=np.float32)
-                tactile_norm = tactile.copy()
-                valid = tactile_norm >= 0
-                tactile_norm[valid] = (tactile_norm / max_vals)[valid]
+                    tactile = np.array(tactile_list, dtype=np.float32)          # (N, 10, 4)
+                    tactile[..., 2][tactile[..., 2] == 65535] = -1.0
 
-                # ── Angles ───────────────────────────────────────────────────
-                angle_list = []
-                for frame in frames:
-                    lh_q = np.array(frame["states"]["left_ee"]["qpos"],  dtype=np.float32)
-                    rh_q = np.array(frame["states"]["right_ee"]["qpos"], dtype=np.float32)
-                    angle_list.append(
-                        np.concatenate([_ee_qpos_to_finger_angles(lh_q),
-                                        _ee_qpos_to_finger_angles(rh_q)], axis=0)
-                    )  # (10, 4)
-                angles = np.array(angle_list, dtype=np.float32)   # (N, 10, 4)
+                    if self.subtract_baseline:
+                        baseline = tactile[0].copy()                             # (10, 4)
+                        valid_t  = tactile >= 0
+                        valid_b  = baseline >= 0
+                        sub_mask = valid_t & valid_b[np.newaxis]
+                        tactile[sub_mask] -= np.broadcast_to(baseline, tactile.shape)[sub_mask]
 
-                # ── Windows ──────────────────────────────────────────────────
-                max_start  = n - self.num_frames_per_window
-                win_starts = list(range(0, max(1, max_start + 1), self.shift_per_window))
-                label_tensor = torch.tensor(label, dtype=torch.long)
+                    max_vals = np.array(_TACTILE_MAX, dtype=np.float32)
+                    tactile_norm = tactile.copy()
+                    valid = tactile_norm >= 0
+                    tactile_norm[valid] = (tactile_norm / max_vals)[valid]
 
-                self.episode_data.append({
-                    "path":          str(ep_dir),
-                    "window_starts": win_starts,
-                    "label":         label,
-                })
+                    # ── Angles ───────────────────────────────────────────────────
+                    angle_list = []
+                    for frame in frames:
+                        lh_q = np.array(frame["states"]["left_ee"]["qpos"],  dtype=np.float32)
+                        rh_q = np.array(frame["states"]["right_ee"]["qpos"], dtype=np.float32)
+                        angle_list.append(
+                            np.concatenate([_ee_qpos_to_finger_angles(lh_q),
+                                            _ee_qpos_to_finger_angles(rh_q)], axis=0)
+                        )  # (10, 4)
+                    angles = np.array(angle_list, dtype=np.float32)   # (N, 10, 4)
 
-                for ws in win_starts:
-                    we = ws + self.num_frames_per_window
-                    self.windows.append({
-                        "joint_contact":      torch.from_numpy(tactile_norm[ws:we].copy()),
-                        "finger_angles":      torch.from_numpy(angles[ws:we].copy()),
-                        "label":              label_tensor,
-                        "episode_path":       str(ep_dir),
-                        "window_start_frame": ws,
+                    # ── Windows ──────────────────────────────────────────────────
+                    max_start  = n - self.num_frames_per_window
+                    win_starts = list(range(0, max(1, max_start + 1), self.shift_per_window))
+                    label_tensor = torch.tensor(label, dtype=torch.long)
+
+                    self.episode_data.append({
+                        "path":          str(ep_dir),
+                        "window_starts": win_starts,
+                        "label":         label,
                     })
+
+                    for ws in win_starts:
+                        we = ws + self.num_frames_per_window
+                        self.windows.append({
+                            "joint_contact":      torch.from_numpy(tactile_norm[ws:we].copy()),
+                            "finger_angles":      torch.from_numpy(angles[ws:we].copy()),
+                            "label":              label_tensor,
+                            "episode_path":       str(ep_dir),
+                            "window_start_frame": ws,
+                        })
 
         log.info(
             f"BraincoAngleGraspDataset: {len(self.episode_data)} episodes, "

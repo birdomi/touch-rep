@@ -24,6 +24,11 @@ log = get_pylogger(__name__)
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
+DEFAULT_LABEL_DIRS = {"grasp_success": 1, "grasp_fail": 0}
+
+
+def _get_label_dirs(label_dirs):
+    return [(str(name), int(label)) for name, label in label_dirs.items()]
 
 
 class BraincoGraspVisionDataset(data.Dataset):
@@ -52,6 +57,7 @@ class BraincoGraspVisionDataset(data.Dataset):
         self.interpolating_freq = config.interpolating_freq
         self.num_frames_per_window = int(round(self.window_time * self.interpolating_freq))
         self.shift_per_window = max(1, int(round(self.num_frames_per_window * (1.0 - self.window_overlap))))
+        self.data_roots = self._get_data_roots(config, data_path)
 
         # Transforms
         if augment:
@@ -82,16 +88,30 @@ class BraincoGraspVisionDataset(data.Dataset):
 
     def _discover_episodes(self):
         episodes = []
-        for label_name, label_val in [("grasp_success", 1), ("grasp_fail", 0)]:
-            label_dir = self.data_path / label_name
-            if not label_dir.exists():
-                log.warning(f"{label_dir} not found, skipping.")
-                continue
-            for ep_dir in sorted(d for d in label_dir.iterdir()
-                                  if d.is_dir() and d.name.startswith("episode_")):
-                if (ep_dir / "data.json").exists():
-                    episodes.append((ep_dir, label_val))
+        for data_root, label_dirs in self.data_roots:
+            log.info(f"Discovering vision episodes from: {data_root}")
+            for label_name, label_val in label_dirs:
+                label_dir = data_root / label_name
+                if not label_dir.exists():
+                    log.warning(f"{label_dir} not found, skipping.")
+                    continue
+                for ep_dir in sorted(d for d in label_dir.iterdir()
+                                      if d.is_dir() and d.name.startswith("episode_")):
+                    if (ep_dir / "data.json").exists():
+                        episodes.append((ep_dir, label_val))
         return episodes
+
+    def _get_data_roots(self, config: DictConfig, data_path: str):
+        data_roots = config.get("data_roots")
+        if data_roots:
+            roots = []
+            for root_cfg in data_roots:
+                label_dirs = root_cfg.get("label_dirs", config.get("label_dirs", DEFAULT_LABEL_DIRS))
+                roots.append((Path(str(root_cfg.data_path)), _get_label_dirs(label_dirs)))
+            return roots
+
+        label_dirs = config.get("label_dirs", DEFAULT_LABEL_DIRS)
+        return [(Path(data_path), _get_label_dirs(label_dirs))]
 
     def _load_all_episodes(self):
         for ep_path, label in self._discover_episodes():

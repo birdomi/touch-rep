@@ -1,0 +1,43 @@
+train_dataloader:
+  batch_size: 32
+  num_workers: 4
+  shuffle: True
+  drop_last: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 32
+  num_workers: 4
+  shuffle: False
+  drop_last: False
+  pin_memory: True
+  persistent_workers: True
+
+normalization:
+  mean: null
+  std: null
+
+sensor: brainco_grasp_prediction
+train_val_split: 0.8
+
+window_time: 0.3
+window_overlap: 0.0
+interpolating_freq: 100
+
+dataset:
+  _target_: tactile_ssl.data.brainco_grasp_dataset.BraincoGraspDetectionDataset
+  config:
+    window_time: ${data.window_time}
+    window_overlap: ${data.window_overlap}
+    interpolating_freq: ${data.interpolating_freq}
+    subtract_baseline: False
+    smooth_data: False
+    bias_noise_std: 0
+    bias_range: 0
+    pose_type: fingertip
+    label_dirs:
+      box_succ: 1
+      box_fail: 0
+  data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_06
+  brainco_urdf_path: ${paths.data_root}/brainco/urdf/

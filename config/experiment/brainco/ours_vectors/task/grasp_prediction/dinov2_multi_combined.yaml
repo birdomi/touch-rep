@@ -1,0 +1,29 @@
+# @package _global_
+defaults:
+  - override /data: brainco_angle_grasp_prediction_combined
+  - override /task: brainco_angle_grasp_prediction
+  - _self_
+
+ssl_name: dinov2
+sensor: brainco_angle
+experiment_name: angle_grasp_prediction_combined_pretrained
+ckpt_path: ./
+
+resume_id: ~
+train_data_budget: 1.0
+val_data_budget: 1.0
+
+fold: 0
+num_folds: 4
+
+wandb:
+  entity: ryk9012-gwangju-institute-of-science-and-technology
+  project: brainco_angle_grasp_prediction
+  group: angle_grasp_prediction_combined_pretrained
+  tags: ["angle", "grasp_prediction", "combined", "pretrained"]
+
+task:
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_angle/epoch-0050-all.ckpt
+  train_encoder: true
+  # model_encoder:
+    # fine_tune_sensor: true

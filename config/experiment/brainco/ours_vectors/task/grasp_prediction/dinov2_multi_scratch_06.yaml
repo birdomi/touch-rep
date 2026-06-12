@@ -1,0 +1,30 @@
+# @package _global_
+
+defaults:
+  - override /data: brainco_angle_grasp_prediction_06
+  - override /task: brainco_angle_grasp_prediction
+  - _self_
+
+ssl_name: dinov2
+sensor: brainco_angle
+experiment_name: angle_grasp_prediction_06_scratch
+
+ckpt_path: ./
+resume_id: ~
+
+fold: 0
+num_folds: 5
+
+wandb:
+  entity: ryk9012-gwangju-institute-of-science-and-technology
+  project: brainco_angle_grasp_prediction
+  group: angle_grasp_prediction_06_scratch
+  tags: ["angle", "grasp_prediction", "grasp_prediction_06", "scratch"]
+
+trainer:
+  max_epochs: 100
+  validation_frequency: 5
+
+task:
+  checkpoint_encoder: ~
+  train_encoder: true

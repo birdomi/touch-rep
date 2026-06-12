@@ -69,7 +69,7 @@ def get_dataloader_vision(cfg: DictConfig):
         data_path=data_cfg.data_path,
         num_frames_per_sample=int(data_cfg.get("num_frames_per_sample", 4)),
         img_size=int(data_cfg.get("img_size", 224)),
-        augment=False,
+        augment=bool(data_cfg.get("augment", False)),
     )
 
     # Sort episodes by episode number
@@ -189,6 +189,7 @@ def train(cfg: DictConfig) -> dict:
         freeze_backbone=cfg.get("freeze_backbone", False),
         optim_cfg=optim_cfg,
         scheduler_cfg=scheduler_cfg,
+        num_classes=int(cfg.get("num_classes", 2)),
     )
 
     trainer = Trainer(wandb_logger=wb, **cfg.trainer)

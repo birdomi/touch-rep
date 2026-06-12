@@ -1,3 +1,4 @@
+import os
 import random
 from typing import Any, Dict, List, Optional, Literal
 
@@ -6,7 +7,14 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.utils.data as data
-from xformers.ops import fmha
+
+if os.environ.get("XFORMERS_DISABLED") is None:
+    try:
+        from xformers.ops import fmha
+    except ImportError:
+        fmha = None
+else:
+    fmha = None
 
 from tactile_ssl.algorithm import MAEModule
 from tactile_ssl.data.xela.utils import xela_sensor_layout

@@ -3,12 +3,16 @@
 # AngleTransformer 기반 object classification 실험을 순차 실행한다.
 #
 # 사용법:
-#   bash scripts/run_angle_obj_classification.sh                    # 전체 (yaml 기본 ckpt)
+#   bash scripts/run_angle_obj_classification.sh                    # scratch + pretrained(hot3d/taco/arctic/brainco) 전체
 #   bash scripts/run_angle_obj_classification.sh scratch            # scratch 실험만
-#   bash scripts/run_angle_obj_classification.sh pretrained         # pretrained 실험만
+#   bash scripts/run_angle_obj_classification.sh pretrained         # pretrained × {hot3d,taco,arctic,brainco}
 #   bash scripts/run_angle_obj_classification.sh -m epoch-0150      # 특정 모델 하나
 #   bash scripts/run_angle_obj_classification.sh pretrained -m "epoch-0150,epoch-0040"
 #   bash scripts/run_angle_obj_classification.sh -m "dinov2_angle/epoch-0150.ckpt,dinov2_multi_sensor_pretrained/epoch-0150-all-cls.ckpt"
+#
+# 기본 pretrained 모델 (DEFAULT_PRETRAINED_MODELS):
+#   epoch-0200-hot3d, epoch-0200-taco, epoch-0300-arctic, epoch-5000-brainco
+#   (모두 checkpoints/dinov2_angle/ 하위)
 #
 # 결과:
 #   scripts/logs/<timestamp>/  — 실험별 전체 로그
@@ -43,6 +47,14 @@ PRETRAINED_EXPERIMENTS=(
     "object_classification/dinov2_multi_freeze"
 )
 
+# 기본 pretrained 모델 목록: -m 미지정 시 dinov2_angle/ 의 네 체크포인트를 모두 순회한다.
+DEFAULT_PRETRAINED_MODELS=(
+    "epoch-0200-hot3d"
+    "epoch-0200-taco"
+    "epoch-0300-arctic"
+    "epoch-5000-brainco"
+)
+
 # ── CLI 인자 파싱 ─────────────────────────────────────────────────────────────
 MODE="all"
 SELECTED_MODELS=()
@@ -66,7 +78,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ ${#SELECTED_MODELS[@]} -eq 0 ]] && SELECTED_MODELS=("")
+# 모델 미지정 시 DEFAULT_PRETRAINED_MODELS 의 4개 체크포인트(hot3d/taco/arctic/brainco)를 순회한다.
+[[ ${#SELECTED_MODELS[@]} -eq 0 ]] && SELECTED_MODELS=("${DEFAULT_PRETRAINED_MODELS[@]}")
 
 # ── ALL_EXPERIMENTS 동적 생성 ─────────────────────────────────────────────────
 ALL_EXPERIMENTS=()

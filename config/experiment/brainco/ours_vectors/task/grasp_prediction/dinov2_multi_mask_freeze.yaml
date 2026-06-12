@@ -23,8 +23,9 @@ wandb:
   tags: ["angle", "grasp_prediction", "pretrained", "mask", "freeze"]
 
 task:
-  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_angle/epoch-0150.ckpt
-  train_encoder: false
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_angle/epoch-0200-hot3d.ckpt
+  train_encoder: true
   model_encoder:
     in_dim: 42
     use_null_token: true
+    fine_tune_sensor: true

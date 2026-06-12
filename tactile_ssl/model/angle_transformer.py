@@ -99,6 +99,7 @@ class AngleTransformer(SignalTransformer):
         causal: bool = False,
         pre_fusion_depth: Optional[int] = None,
         normalization: Optional[DictConfig] = None,
+        fine_tune_sensor: bool = False,
     ):
         assert sequence_length % time_chunk_size == 0, (
             f"sequence_length({sequence_length}) must be divisible by time_chunk_size({time_chunk_size})"
@@ -188,12 +189,38 @@ class AngleTransformer(SignalTransformer):
         self.init_weights()
         nn.init.trunc_normal_(self.hand_embed, std=0.02)
 
+        self.fine_tune_sensor = fine_tune_sensor
+        if fine_tune_sensor:
+            self._apply_fine_tune_sensor()
+
         num_chunks = seq // chunk
         log.info(
             f"AngleTransformer: T={seq}, chunk={chunk}, num_chunks={num_chunks}, "
             f"N_contact={in_dim}, N_angles={pos_in_dim}, "
             f"pre_fusion_depth={self.pre_fusion_depth}, embed_dim={D}, "
-            f"use_null_token={self.use_null_token}"
+            f"use_null_token={self.use_null_token}, "
+            f"fine_tune_sensor={self.fine_tune_sensor}"
+        )
+
+    # ── fine-tune mode ────────────────────────────────────────────────────────
+
+    def _apply_fine_tune_sensor(self) -> None:
+        """Freeze all parameters except contact_pos_embed, sensor_embed, sensor_block."""
+        trainable_modules = {"sensor_embed", "sensor_block"}
+        trainable_params = {"contact_pos_embed"}
+
+        for name, param in self.named_parameters():
+            top = name.split(".", 1)[0]
+            if top in trainable_modules or top in trainable_params:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+
+        n_trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        n_total = sum(p.numel() for p in self.parameters())
+        log.info(
+            f"fine_tune_sensor=True: unfroze contact_pos_embed, sensor_embed, sensor_block "
+            f"({n_trainable:,} / {n_total:,} params trainable)"
         )
 
     # ── helpers ───────────────────────────────────────────────────────────────

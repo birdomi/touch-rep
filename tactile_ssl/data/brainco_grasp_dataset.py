@@ -57,6 +57,20 @@ class BraincoGraspDetectionDataset(BraincoSSLDataset):
         "grasp_fail":    0,
     }
 
+    def _get_class_dirs(self, label_dirs):
+        return [(str(name), int(label)) for name, label in label_dirs.items()]
+
+    def _get_data_roots(self, config: DictConfig, data_path: str):
+        data_roots = config.get("data_roots")
+        if data_roots:
+            roots = []
+            for root_cfg in data_roots:
+                label_dirs = root_cfg.get("label_dirs", config.get("label_dirs", self._CLASS_DIRS))
+                roots.append((Path(str(root_cfg.data_path)), self._get_class_dirs(label_dirs)))
+            return roots
+
+        return [(Path(data_path), self._get_class_dirs(config.get("label_dirs", self._CLASS_DIRS)))]
+
     def __init__(
         self,
         config: DictConfig,
@@ -71,67 +85,67 @@ class BraincoGraspDetectionDataset(BraincoSSLDataset):
         self.episode_data: list = []
         self.windows:      list = []
 
-        data_root = Path(data_path)
-
-        for class_dir, label in self._CLASS_DIRS.items():
-            class_path = data_root / class_dir
-            if not class_path.exists():
-                log.warning(f"Class directory not found, skipping: {class_path}")
-                continue
-
-            episode_dirs = sorted(
-                p for p in class_path.iterdir()
-                if p.is_dir() and p.name.startswith("episode_")
-            )
-            log.info(f"[{class_dir}] Found {len(episode_dirs)} episodes")
-
-            for ep_path in episode_dirs:
-                log.info(f"  Loading: {ep_path}")
-                try:
-                    ep_ds = BraincoSSLDataset(
-                        config=config,
-                        data_path=str(ep_path),
-                        brainco_urdf_path=brainco_urdf_path,
-                        object_class=label,
-                        robot_to_human=robot_to_human,
-                        retargeting_config_path_left=retargeting_config_path_left,
-                        retargeting_config_path_right=retargeting_config_path_right,
-                    )
-                except Exception as exc:
-                    log.warning(f"  Skipping {ep_path}: {exc}")
+        for data_root, class_dirs in self._get_data_roots(config, data_path):
+            log.info(f"Loading grasp episodes from: {data_root}")
+            for class_dir, label in class_dirs:
+                class_path = data_root / class_dir
+                if not class_path.exists():
+                    log.warning(f"Class directory not found, skipping: {class_path}")
                     continue
 
-                if ep_ds.num_frames < ep_ds.num_frames_per_window:
-                    log.warning(
-                        f"  Skipping {ep_path}: {ep_ds.num_frames} frames < window size {ep_ds.num_frames_per_window}"
-                    )
-                    continue
+                episode_dirs = sorted(
+                    p for p in class_path.iterdir()
+                    if p.is_dir() and p.name.startswith("episode_")
+                )
+                log.info(f"[{class_dir}] Found {len(episode_dirs)} episodes")
 
-                # ── episode_data entry ──────────────────────────────────
-                print(ep_path, label)
-                self.episode_data.append({
-                    "path":          str(ep_path),
-                    "window_starts": ep_ds.data_idxs.copy(),
-                    "label":         label,
-                })
+                for ep_path in episode_dirs:
+                    log.info(f"  Loading: {ep_path}")
+                    try:
+                        ep_ds = BraincoSSLDataset(
+                            config=config,
+                            data_path=str(ep_path),
+                            brainco_urdf_path=brainco_urdf_path,
+                            object_class=label,
+                            robot_to_human=robot_to_human,
+                            retargeting_config_path_left=retargeting_config_path_left,
+                            retargeting_config_path_right=retargeting_config_path_right,
+                        )
+                    except Exception as exc:
+                        log.warning(f"  Skipping {ep_path}: {exc}")
+                        continue
 
-                # ── Flatten windows using ep_ds.__getitem__ ─────────────
-                label_tensor = torch.tensor(label, dtype=torch.long)
-                for w_idx in range(len(ep_ds)):
-                    sample = ep_ds[w_idx]
-                    sample["episode_path"] = str(ep_path)
-                    sample["window_start_frame"] = int(ep_ds.data_idxs[w_idx])
-                    
-                    new_sample = {}
-                    new_sample["label"] = label_tensor
-                    new_sample['sensor'] = sample['sensor']
-                    if use_skeleton_poses:
-                        new_sample['sensor_poses'] = sample['skeleton_poses']
-                    else:
-                        new_sample['sensor_poses'] = sample['sensor_poses']
-                    new_sample['wrist_poses'] = sample['wrist_poses']
+                    if ep_ds.num_frames < ep_ds.num_frames_per_window:
+                        log.warning(
+                            f"  Skipping {ep_path}: {ep_ds.num_frames} frames < window size {ep_ds.num_frames_per_window}"
+                        )
+                        continue
 
-                    self.windows.append(new_sample)
+                    # ── episode_data entry ──────────────────────────────────
+                    print(ep_path, label)
+                    self.episode_data.append({
+                        "path":          str(ep_path),
+                        "window_starts": ep_ds.data_idxs.copy(),
+                        "label":         label,
+                    })
+
+                    # ── Flatten windows using ep_ds.__getitem__ ─────────────
+                    label_tensor = torch.tensor(label, dtype=torch.long)
+                    for w_idx in range(len(ep_ds)):
+                        sample = ep_ds[w_idx]
+                        sample["episode_path"] = str(ep_path)
+                        sample["window_start_frame"] = int(ep_ds.data_idxs[w_idx])
+
+                        new_sample = {}
+                        new_sample["label"] = label_tensor
+                        new_sample['sensor'] = sample['sensor']
+                        if use_skeleton_poses:
+                            new_sample['sensor_poses'] = sample['skeleton_poses']
+                        else:
+                            new_sample['sensor_poses'] = sample['sensor_poses']
+                        new_sample['wrist_poses'] = sample['wrist_poses']
+
+                        self.windows.append(new_sample)
 
         log.info(
             f"BraincoGraspDetectionDataset ready: "

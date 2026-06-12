@@ -1,5 +1,6 @@
 import copy
 import math
+import os
 from functools import partial
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
@@ -18,7 +19,13 @@ from tactile_ssl.utils.ema import update_moving_average
 from tactile_ssl.utils.logging import get_pylogger, img_logger
 from tactile_ssl.utils import patchify_image, patches_to_image
 
-from xformers.ops import fmha
+if os.environ.get("XFORMERS_DISABLED") is None:
+    try:
+        from xformers.ops import fmha
+    except ImportError:
+        fmha = None
+else:
+    fmha = None
 
 log = get_pylogger(__name__)
 

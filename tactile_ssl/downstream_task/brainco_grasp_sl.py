@@ -138,12 +138,14 @@ class BraincoGraspDetectionSLModule(SLModule):
         
         embed_dim = self.model_encoder.embed_dim
         num_heads = getattr(self.model_encoder, "num_heads", 12)
+        # num_classes comes from model_task config; default to 2 (binary grasp).
+        self.num_classes = int(getattr(model_task, "num_classes", 2))
         self.pooler = AttentivePooler(
             embed_dim=embed_dim,
             num_heads=num_heads,
         )
         self.classifier = BraincoGraspProbe(
-            num_classes=2,
+            num_classes=self.num_classes,
             embed_dim=embed_dim,
             num_heads=num_heads,
         )
@@ -264,10 +266,12 @@ class BraincoGraspDetectionSLModule(SLModule):
         labels = torch.cat(self.val_labels, dim=0).cpu().numpy()
 
         accuracy = (preds == labels).sum() / len(preds)
-        f1 = f1_score(labels, preds, average="binary", zero_division=0)
+        class_labels = list(range(self.num_classes))
+        f1_average = "binary" if self.num_classes == 2 else "macro"
+        f1 = f1_score(labels, preds, average=f1_average, zero_division=0)
 
         # Confusion matrix
-        cm = confusion_matrix(labels, preds, labels=[0, 1])
+        cm = confusion_matrix(labels, preds, labels=class_labels)
 
         # ── test-mode: just record metrics and return ──────────────────────────
         if self._in_test:
@@ -294,9 +298,12 @@ class BraincoGraspDetectionSLModule(SLModule):
         log.info(f"Confusion Matrix (Normalized):\n{cm}")
         log.info("="*40)
 
+        display_labels = (
+            ["Fail", "Success"] if self.num_classes == 2 else [str(c) for c in class_labels]
+        )
         disp = ConfusionMatrixDisplay(
             confusion_matrix=cm,
-            display_labels=["Fail", "Success"],
+            display_labels=display_labels,
         )
         disp.plot(cmap="Blues")
         fig = disp.ax_.get_figure()
@@ -389,7 +396,10 @@ class BraincoGraspDetectionSLModule(SLModule):
         Tactile shows normal force (ch0) and proximity (ch3) over time as heatmaps.
         Falls back to a blank panel when colors/ is unavailable.
         """
-        CLASS_NAMES = {0: "Fail", 1: "Success"}
+        if self.num_classes == 2:
+            CLASS_NAMES = {0: "Fail", 1: "Success"}
+        else:
+            CLASS_NAMES = {i: str(i) for i in range(self.num_classes)}
         FINGER_NAMES = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
 
         samples = failed_samples[:max_samples]

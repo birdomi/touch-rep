@@ -1,0 +1,39 @@
+# @package _global_
+
+defaults:
+  - override /data: arctic
+  - override /algorithm: angle_dinov2
+  - _self_
+
+model_size: tiny
+experiment_name: dinov2_arctic_block4_${model_size}
+ckpt_path: ./
+
+wandb:
+  entity: ryk9012-gwangju-institute-of-science-and-technology
+  project: dinov2
+  group: dino_arctic_block4_${model_size}
+  tags: ["arctic", "block4", "${model_size}"]
+
+trainer:
+  max_epochs: 200
+  validation_frequency: 50
+
+algorithm:
+  centering: centering
+  encoder:
+    _target_: tactile_ssl.model.angle_tiny
+    in_dim: 42
+    in_chans: 1
+    pos_in_dim: 10
+    pos_in_chans: 4
+    sequence_length: 1
+    time_chunk_size: 1
+    num_register_tokens: 1
+    pos_embed_fn: learned
+    with_masktoken: True
+    drop_path_rate: 0.3
+    drop_path_uniform: True
+    normalization: ${data.normalization}
+    causal: False
+    pre_fusion_depth: 4

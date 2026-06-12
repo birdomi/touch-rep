@@ -1,0 +1,35 @@
+train_dataloader:
+  batch_size: 32
+  num_workers: 4
+  shuffle: True
+  drop_last: True
+  pin_memory: True
+  persistent_workers: True
+
+val_dataloader:
+  batch_size: 32
+  num_workers: 4
+  shuffle: False
+  drop_last: False
+  pin_memory: True
+  persistent_workers: True
+
+sensor: brainco_angle_grasp_prediction
+train_data_budget: 1.0
+val_data_budget: 1.0
+
+window_time: 0.15
+window_overlap: 0.0
+interpolating_freq: 100
+
+dataset:
+  _target_: tactile_ssl.data.brainco_angle_grasp_dataset.BraincoAngleGraspDataset
+  config:
+    window_time: ${data.window_time}
+    window_overlap: ${data.window_overlap}
+    interpolating_freq: ${data.interpolating_freq}
+    subtract_baseline: true
+    label_dirs:
+      box_succ: 1
+      box_fail: 0
+  data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_06
