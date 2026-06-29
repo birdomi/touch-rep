@@ -30,12 +30,37 @@ dataset:
     interpolating_freq: ${data.interpolating_freq}
     subtract_baseline: true
     data_roots:
-      - data_path: ${paths.data_root}/brainco/downstream/grasp_prediction
-        label_dirs:
-          grasp_success: 1
-          grasp_fail: 0
-      - data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_06
+      - data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_0611
         label_dirs:
           box_succ: 1
           box_fail: 0
+          tumbler_succ: 1
+          tumbler_fail: 0
+          eraser_succ: 1
+          eraser_fail: 0  
+          driver_succ: 1
+          driver_fail: 0
   data_path: ${paths.data_root}/brainco/downstream/grasp_prediction
+
+# Optional: set this to use a fixed validation dataset instead of k-fold
+# splitting from `dataset`. Keep null for the existing k-fold behavior.
+val_dataset: null
+# val_dataset:
+#   _target_: tactile_ssl.data.brainco_angle_grasp_dataset.BraincoAngleGraspDataset
+#   config:
+#     window_time: ${data.window_time}
+#     window_overlap: ${data.window_overlap}
+#     interpolating_freq: ${data.interpolating_freq}
+#     subtract_baseline: true
+#     data_roots:
+#       - data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_0611
+#         label_dirs:
+#           # box_succ: 1
+#           # box_fail: 0
+#           # tumbler_succ: 1
+#           # tumbler_fail: 0
+#           # eraser_succ: 1
+#           # eraser_fail: 0
+#           driver_succ: 1
+#           driver_fail: 0
+#   data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_0611

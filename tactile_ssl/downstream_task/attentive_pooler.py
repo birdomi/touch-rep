@@ -56,7 +56,6 @@ class AttentivePooler(nn.Module):
                         num_heads=num_heads,
                         mlp_ratio=mlp_ratio,
                         qkv_bias=qkv_bias,
-                        qk_scale=False,
                         norm_layer=norm_layer,
                     )
                     for i in range(depth - 1)
@@ -98,9 +97,12 @@ class AttentivePooler(nn.Module):
     def forward(self, x):
         q = self.query_tokens.repeat(len(x), 1, 1)
         q = self.cross_attention_block(q, x)
+        # print(q.shape, x.shape)
         if self.blocks is not None:
             for blk in self.blocks:
                 q = blk(q)
+        # print(q.shape)
+
         return q
 
 
@@ -132,9 +134,12 @@ class AttentiveClassifier(nn.Module):
             qkv_bias=qkv_bias,
             complete_block=complete_block,
         )
-        self.linear = nn.Linear(embed_dim, num_classes, bias=True)
+        self.linear = nn.Linear(embed_dim, num_classes, bias=False)
 
     def forward(self, x):
+        print('embed', x.shape)
         x = self.pooler(x).squeeze(1)
         x = self.linear(x)
+        print('logit', x.shape)
+
         return x

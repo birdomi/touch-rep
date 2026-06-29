@@ -3,13 +3,14 @@
 # AngleTransformer + BraincoAngleGraspDataset 기반 grasp prediction 실험을 순차 실행한다.
 #
 # 사용법:
-#   bash scripts/run_angle_experiments.sh                              # 전체 (yaml 기본 ckpt)
+#   bash scripts/run_angle_experiments.sh                              # scratch + DEFAULT_PRETRAINED_MODELS 전체
 #   bash scripts/run_angle_experiments.sh scratch                      # scratch 실험만
-#   bash scripts/run_angle_experiments.sh pretrained                   # pretrained 실험만 (기본 ckpt)
+#   bash scripts/run_angle_experiments.sh pretrained                   # pretrained 실험만 (DEFAULT_PRETRAINED_MODELS)
 #   bash scripts/run_angle_experiments.sh -m epoch-0150                # 특정 모델 하나
 #   bash scripts/run_angle_experiments.sh pretrained -m epoch-0150     # pretrained + 특정 모델
 #   bash scripts/run_angle_experiments.sh -m "epoch-0150,epoch-0040"   # 여러 모델 (콤마 구분)
 #   bash scripts/run_angle_experiments.sh -m "dinov2_angle/epoch-0150.ckpt,dinov2_multi_sensor_pretrained/epoch-0150-all-cls.ckpt"
+#   bash scripts/run_angle_experiments.sh pretrained -m yaml           # yaml 기본 checkpoint만 사용
 #
 # 결과:
 #   scripts/logs/<timestamp>/  — 실험별 전체 로그
@@ -34,14 +35,30 @@ mkdir -p "${LOG_DIR}"
 
 # ── 실험 목록 ─────────────────────────────────────────────────────────────────
 SCRATCH_EXPERIMENTS=(
-    "grasp_prediction/dinov2_multi_scratch"
+    # "grasp_prediction/dinov2_multi_scratch"
+    "grasp_prediction/dinov2_multi_scratch_combined"
 )
 
 PRETRAINED_EXPERIMENTS=(
-    "grasp_prediction/dinov2_multi"
-    "grasp_prediction/dinov2_multi_freeze"
-    "grasp_prediction/dinov2_multi_mask"
-    "grasp_prediction/dinov2_multi_mask_freeze"
+    # "grasp_prediction/dinov2_multi"
+    # "grasp_prediction/dinov2_multi_freeze_combined"
+    # "grasp_prediction/dinov2_multi_mask"
+    # "grasp_prediction/dinov2_multi_mask_freeze"
+    # "grasp_prediction/dinov2_multi_combined"
+)
+
+# -m/--models를 생략하면 아래 체크포인트들을 pretrained 실험에 사용한다.
+# - "epoch-XXXX"처럼 stem만 쓰면 각 experiment yaml의 checkpoint_encoder 디렉토리를 따라간다.
+# - "dir/file.ckpt"처럼 경로를 쓰면 그대로 사용한다.
+# - yaml 기본값만 쓰고 싶으면 CLI에서 `-m yaml`을 넘긴다.
+DEFAULT_PRETRAINED_MODELS=(
+    # "epoch-0200-all"
+    # "epoch-0110-all"
+    # "epoch-0150"
+    # "epoch-0200-hot3d"
+    # "epoch-0200-taco"
+    # "epoch-0300-arctic"
+    # "epoch-5000-brainco"
 )
 
 # ── CLI 인자 파싱 ─────────────────────────────────────────────────────────────
@@ -50,6 +67,7 @@ PRETRAINED_EXPERIMENTS=(
 #   -m|--models <m1,m2,...>    pretrained 실험에 사용할 체크포인트 목록
 MODE="all"
 SELECTED_MODELS=()
+USING_DEFAULT_MODELS=true
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -60,6 +78,7 @@ while [[ $# -gt 0 ]]; do
         -m|--models)
             shift
             IFS=',' read -ra SELECTED_MODELS <<< "$1"
+            USING_DEFAULT_MODELS=false
             shift
             ;;
         *)
@@ -70,8 +89,21 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# 모델 미지정 시 yaml 기본 checkpoint 사용 (빈 문자열 = 오버라이드 없음)
-[[ ${#SELECTED_MODELS[@]} -eq 0 ]] && SELECTED_MODELS=("")
+# 모델 미지정 시 스크립트 내부 DEFAULT_PRETRAINED_MODELS 사용
+if [[ ${#SELECTED_MODELS[@]} -eq 0 ]]; then
+    if [[ ${#DEFAULT_PRETRAINED_MODELS[@]} -gt 0 ]]; then
+        SELECTED_MODELS=("${DEFAULT_PRETRAINED_MODELS[@]}")
+    else
+        SELECTED_MODELS=("yaml")
+    fi
+fi
+
+# "yaml" = yaml 기본 checkpoint 사용 (빈 문자열 = 오버라이드 없음)
+for i in "${!SELECTED_MODELS[@]}"; do
+    if [[ "${SELECTED_MODELS[$i]}" == "yaml" || "${SELECTED_MODELS[$i]}" == "default" ]]; then
+        SELECTED_MODELS[$i]=""
+    fi
+done
 
 # ── ALL_EXPERIMENTS 동적 생성 ────────────────────────────────────────────────
 # scratch: 모델 선택과 무관하게 1회 실행
@@ -196,7 +228,20 @@ best = extract_epoch('Best Epoch')
 if any(last) or any(best):
     print(','.join([*last, *best, 'OK']))
 else:
-    print(",,,,,,,,INCOMPLETE")
+    def extract_single(label):
+        pat = rf'{label}\s+[^A-Za-z0-9]*\s+Acc:\s+([\d.]+|nan)\s+F1:\s+([\d.]+|nan)'
+        m = re.search(pat, text)
+        if m:
+            # Single explicit-val runs do not have fold std.
+            return m.group(1), m.group(2), '0.0000', '0.0000'
+        return ('', '', '', '')
+
+    last = extract_single('Last')
+    best = extract_single('Best')
+    if any(last) or any(best):
+        print(','.join([*last, *best, 'OK']))
+    else:
+        print(",,,,,,,,INCOMPLETE")
 PYEOF
 }
 
@@ -259,7 +304,11 @@ echo "  모드: ${MODE}"
 if [[ "${SELECTED_MODELS[0]}" == "" && ${#SELECTED_MODELS[@]} -eq 1 ]]; then
     echo "  pretrained model: (각 yaml 기본값 사용)"
 else
-    echo "  pretrained model(s):"
+    if [[ "${USING_DEFAULT_MODELS}" == true ]]; then
+        echo "  pretrained model(s): (DEFAULT_PRETRAINED_MODELS)"
+    else
+        echo "  pretrained model(s):"
+    fi
     for m in "${SELECTED_MODELS[@]}"; do
         echo "    - ${m}"
     done
@@ -279,11 +328,11 @@ echo "════════════════════════�
 echo "  결과 취합 중..."
 echo "════════════════════════════════════════════════════════════════"
 
-echo "task,experiment,pretrained_model,last_mean_acc,last_std_acc,last_mean_f1,last_std_f1,best_mean_acc,best_std_acc,best_mean_f1,best_std_f1,status" \
+echo "task,experiment,pretrained_model,last_mean_acc,last_mean_f1,last_std_acc,last_std_f1,best_mean_acc,best_mean_f1,best_std_acc,best_std_f1,status" \
     > "${SUMMARY_CSV}"
 
 HEADER=$(printf "%-25s  %-35s  %-5s  %-10s  %-10s  %-10s  %-10s  %s" \
-    "Task" "Experiment" "Epoch" "MeanAcc" "StdAcc" "MeanF1" "StdF1" "Status")
+    "Task" "Experiment" "Epoch" "MeanAcc" "MeanF1" "StdAcc" "StdF1" "Status")
 SEP=$(printf "%s" \
     "-------------------------  -----------------------------------  -----  ----------  ----------  ----------  ----------  ------")
 
@@ -298,7 +347,11 @@ SEP=$(printf "%s" \
     if [[ "${SELECTED_MODELS[0]}" == "" && ${#SELECTED_MODELS[@]} -eq 1 ]]; then
         echo "  Pretrained model: (각 yaml 기본값)"
     else
-        echo "  Pretrained model(s) used:"
+        if [[ "${USING_DEFAULT_MODELS}" == true ]]; then
+            echo "  Pretrained model(s) used: (DEFAULT_PRETRAINED_MODELS)"
+        else
+            echo "  Pretrained model(s) used:"
+        fi
         for m in "${SELECTED_MODELS[@]}"; do
             echo "    - ${m}"
         done
@@ -325,7 +378,7 @@ for entry in "${ALL_EXPERIMENTS[@]}"; do
 
     model_display=$(display_model "${exp}" "${ckpt_spec}")
     result=$(extract_results "${log_file}")
-    IFS=',' read -r lm_acc ls_acc lm_f1 ls_f1 bm_acc bs_acc bm_f1 bs_f1 status <<< "${result}"
+    IFS=',' read -r lm_acc lm_f1 ls_acc ls_f1 bm_acc bm_f1 bs_acc bs_f1 status <<< "${result}"
 
     # 모델이 바뀔 때 구분선 + 모델 헤더 출력
     if [[ "${model_display}" != "${prev_model}" ]]; then
@@ -338,16 +391,16 @@ for entry in "${ALL_EXPERIMENTS[@]}"; do
 
     printf "%-25s  %-35s  %-5s  %-10s  %-10s  %-10s  %-10s  %s\n" \
         "${task_dir}" "${exp_name}" "Last" \
-        "${lm_acc:-n/a}" "${ls_acc:-n/a}" "${lm_f1:-n/a}" "${ls_f1:-n/a}" \
+        "${lm_acc:-n/a}" "${lm_f1:-n/a}" "${ls_acc:-n/a}" "${ls_f1:-n/a}" \
         "${status:-UNKNOWN}" \
         | tee -a "${SUMMARY_TXT}"
 
     printf "%-25s  %-35s  %-5s  %-10s  %-10s  %-10s  %-10s\n" \
         "" "" "Best" \
-        "${bm_acc:-n/a}" "${bs_acc:-n/a}" "${bm_f1:-n/a}" "${bs_f1:-n/a}" \
+        "${bm_acc:-n/a}" "${bm_f1:-n/a}" "${bs_acc:-n/a}" "${bs_f1:-n/a}" \
         | tee -a "${SUMMARY_TXT}"
 
-    echo "${task_dir},${exp_name},${model_display},${lm_acc:-},${ls_acc:-},${lm_f1:-},${ls_f1:-},${bm_acc:-},${bs_acc:-},${bm_f1:-},${bs_f1:-},${status:-UNKNOWN}" \
+    echo "${task_dir},${exp_name},${model_display},${lm_acc:-},${lm_f1:-},${ls_acc:-},${ls_f1:-},${bm_acc:-},${bm_f1:-},${bs_acc:-},${bs_f1:-},${status:-UNKNOWN}" \
         >> "${SUMMARY_CSV}"
 done
 

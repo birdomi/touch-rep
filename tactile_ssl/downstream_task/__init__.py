@@ -10,7 +10,12 @@ from .force_sl import (
 from .d360_sl import D360SLModule
 from .classification_sl import D360ClassificationSLModule
 
-from .brainco_grasp_sl import BraincoGraspDetectionSLModule
+from .brainco_grasp_sl import (
+    BraincoGraspDetectionSLModule,
+    BraincoGraspProbe,
+    BraincoGraspRoPEProbe,
+    MeanPoolProbe,
+)
 
 try:
     from .brainco_grasp_fusion_sl import BraincoGraspFusionSLModule

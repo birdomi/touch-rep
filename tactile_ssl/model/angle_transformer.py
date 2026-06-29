@@ -69,6 +69,8 @@ class AngleTransformer(SignalTransformer):
         pre_fusion_depth: sensor_block depth (default depth//4)
         normalization   : DictConfig(mean, std) for contact stream, shape (in_chans,)
         pos_normalization: DictConfig(mean, std) for angle stream, shape (pos_in_chans,)
+        fine_tune_sensor_shallow_blocks:
+            number of shallow shared fusion blocks to train with fine_tune_sensor
     """
 
     def __init__(
@@ -100,6 +102,7 @@ class AngleTransformer(SignalTransformer):
         pre_fusion_depth: Optional[int] = None,
         normalization: Optional[DictConfig] = None,
         fine_tune_sensor: bool = False,
+        fine_tune_sensor_shallow_blocks: Optional[int] = 0,
     ):
         assert sequence_length % time_chunk_size == 0, (
             f"sequence_length({sequence_length}) must be divisible by time_chunk_size({time_chunk_size})"
@@ -140,6 +143,16 @@ class AngleTransformer(SignalTransformer):
         self.pos_in_dim  = pos_in_dim
         self.pos_in_chans = pos_in_chans
         self.pre_fusion_depth = pre_fusion_depth if pre_fusion_depth is not None else depth // 4
+        self.fine_tune_sensor_shallow_blocks = (
+            self.pre_fusion_depth
+            if fine_tune_sensor_shallow_blocks is None
+            else int(fine_tune_sensor_shallow_blocks)
+        )
+        if self.fine_tune_sensor_shallow_blocks < 0:
+            raise ValueError(
+                "fine_tune_sensor_shallow_blocks must be >= 0, "
+                f"got {self.fine_tune_sensor_shallow_blocks}"
+            )
 
         D     = embed_dim
         chunk = time_chunk_size
@@ -199,19 +212,26 @@ class AngleTransformer(SignalTransformer):
             f"N_contact={in_dim}, N_angles={pos_in_dim}, "
             f"pre_fusion_depth={self.pre_fusion_depth}, embed_dim={D}, "
             f"use_null_token={self.use_null_token}, "
-            f"fine_tune_sensor={self.fine_tune_sensor}"
+            f"fine_tune_sensor={self.fine_tune_sensor}, "
+            f"fine_tune_sensor_shallow_blocks={self.fine_tune_sensor_shallow_blocks}"
         )
 
     # ── fine-tune mode ────────────────────────────────────────────────────────
 
     def _apply_fine_tune_sensor(self) -> None:
-        """Freeze all parameters except contact_pos_embed, sensor_embed, sensor_block."""
+        """Freeze all parameters except sensor path and shallow fusion blocks."""
         trainable_modules = {"sensor_embed", "sensor_block"}
         trainable_params = {"contact_pos_embed"}
+        shallow_blocks = min(self.fine_tune_sensor_shallow_blocks, len(self.blocks))
 
         for name, param in self.named_parameters():
             top = name.split(".", 1)[0]
-            if top in trainable_modules or top in trainable_params:
+            is_shallow_block = False
+            if top == "blocks":
+                parts = name.split(".", 2)
+                is_shallow_block = len(parts) > 1 and int(parts[1]) < shallow_blocks
+
+            if top in trainable_modules or top in trainable_params or is_shallow_block:
                 param.requires_grad = True
             else:
                 param.requires_grad = False
@@ -219,7 +239,8 @@ class AngleTransformer(SignalTransformer):
         n_trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         n_total = sum(p.numel() for p in self.parameters())
         log.info(
-            f"fine_tune_sensor=True: unfroze contact_pos_embed, sensor_embed, sensor_block "
+            f"fine_tune_sensor=True: unfroze contact_pos_embed, sensor_embed, "
+            f"sensor_block, blocks[0:{shallow_blocks}] "
             f"({n_trainable:,} / {n_total:,} params trainable)"
         )
 
@@ -287,7 +308,8 @@ class AngleTransformer(SignalTransformer):
         """
         B = x.shape[0]
         x = x.clone()
-        x[x < 0] = 0.0
+        # x[x < 0] = 0.0
+        # print(x, self.signal_mean, self.signal_std)
         x = self.normalize(x)
         return _apply_embed1d(x, self.sensor_embed, B)
 
@@ -400,11 +422,17 @@ class AngleTransformer(SignalTransformer):
 
         fused = torch.cat([pos, sen], dim=1)     # (B_eff, reg+N_a+N_s, D)
 
+        # pos only
+        # fused = pos[:, 1:]
+        
+        # sen only
+        # fused = sen
+
         for blk in self.blocks:
             fused = blk(fused, None)
 
         x_norm = self.norm(fused)
-        return fused, x_norm
+        return x_norm, x_norm
 
     # ── forward ───────────────────────────────────────────────────────────────
 

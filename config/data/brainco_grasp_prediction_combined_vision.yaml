@@ -25,15 +25,59 @@ interpolating_freq: 100
 num_frames_per_sample: 4
 img_size: 224
 augment: false
+crop_mode: bottom_center  # resize | bottom_center
+crop_size: 320
 
-data_roots:
-  - data_path: ${paths.data_root}/brainco/downstream/grasp_prediction
-    label_dirs:
-      grasp_success: 1
-      grasp_fail: 0
-  - data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_06
-    label_dirs:
-      box_succ: 1
-      box_fail: 0
+dataset:
+  _target_: tactile_ssl.data.brainco_grasp_vision_dataset.BraincoGraspVisionDataset
+  config:
+    window_time: ${data.window_time}
+    window_overlap: ${data.window_overlap}
+    interpolating_freq: ${data.interpolating_freq}
+    crop_mode: ${data.crop_mode}
+    crop_size: ${data.crop_size}
+    data_roots:
+      - data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_0611
+        label_dirs:
+          box_succ: 1
+          box_fail: 0
+          tumbler_succ: 1
+          tumbler_fail: 0
+          eraser_succ: 1
+          eraser_fail: 0
+          driver_succ: 1
+          driver_fail: 0
+  data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_0611
+  num_frames_per_sample: ${data.num_frames_per_sample}
+  img_size: ${data.img_size}
+  augment: ${data.augment}
 
-data_path: ${paths.data_root}/brainco/downstream/grasp_prediction
+# Optional: set this to use a fixed validation dataset instead of k-fold
+# splitting from `dataset`. Keep null for the existing k-fold behavior.
+val_dataset: null
+# val_dataset:
+#   _target_: tactile_ssl.data.brainco_grasp_vision_dataset.BraincoGraspVisionDataset
+#   config:
+#     window_time: ${data.window_time}
+#     window_overlap: ${data.window_overlap}
+#     interpolating_freq: ${data.interpolating_freq}
+#     crop_mode: ${data.crop_mode}
+#     crop_size: ${data.crop_size}
+#     data_roots:
+#       - data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_0611
+#         label_dirs:
+#           # box_succ: 1
+#           # box_fail: 0
+#           # tumbler_succ: 1
+#           # tumbler_fail: 0
+#           eraser_succ: 1
+#           eraser_fail: 0
+#           # driver_succ: 1
+#           # driver_fail: 0
+#   data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_0611
+#   num_frames_per_sample: ${data.num_frames_per_sample}
+#   img_size: ${data.img_size}
+#   augment: false
+
+# Backward-compatible flat config path. Used only when `dataset` is unset.
+data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_0611

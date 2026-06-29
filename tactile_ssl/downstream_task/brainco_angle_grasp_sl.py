@@ -63,6 +63,7 @@ class BraincoAngleGraspSLModule(BraincoGraspDetectionSLModule):
             logits = self.classifier(embeddings)
         else:
             logits = self.classifier(embeddings.detach())
+        # print(logits.shape)
 
         return logits
 
