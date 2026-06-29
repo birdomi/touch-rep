@@ -1,0 +1,65 @@
+# @package _global_
+
+defaults:
+  - override /data: brainco_pretraining
+  - override /algorithm: xela_dinov2_pos
+  - _self_
+
+model_size: tiny
+experiment_name: dinov2_brainco_uni_input_${model_size}
+ckpt_path: ./
+
+wandb:
+  entity: ryk9012-gwangju-institute-of-science-and-technology
+  project: brainco_dinov2
+  group: dino_brainco_uni_input_${model_size}
+  tags: ["brainco", "uni_input", "${model_size}"]
+
+trainer:
+  max_epochs: 5000
+  validation_frequency: 50
+
+data:
+  dataset_list:
+    - type: teleop
+      sequence_list:
+        - basket
+        - box
+        - doll
+        - hammer
+        - pot
+        - towel
+      train_dataset_ids: [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11]
+      val_dataset_ids: [0]
+      dataset:
+        _target_: tactile_ssl.data.brainco_tactile.BraincoSSLDataset
+        config:
+          window_time: ${data.window_time}
+          window_overlap: ${data.window_overlap}
+          interpolating_freq: ${data.interpolating_freq}
+          subtract_baseline: True
+          smooth_data: False
+          bias_noise_std: 0
+          bias_range: 0
+        data_path: ${paths.work_dir}/pretraining_dataset/brainco/
+        brainco_urdf_path: ${paths.work_dir}/dataset/brainco/urdf/
+        load_images: False
+
+algorithm:
+  centering: centering
+  encoder:
+    _target_: tactile_ssl.model.brainco_one_${model_size}
+    in_dim: 10
+    in_chans: 4
+    pos_in_chans: 3
+    sequence_length: 1
+    time_chunk_size: 1
+    num_register_tokens: 1
+    pos_embed_fn: learned
+    with_masktoken: True
+    drop_path_rate: 0.3
+    drop_path_uniform: True
+    normalization: ${data.normalization}
+    causal: False
+  online_probes: []
+  online_probes_lrs: []

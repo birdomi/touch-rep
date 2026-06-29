@@ -23,6 +23,15 @@ from tactile_ssl.utils.masking import sample_block_mask, sample_block_size_1d
 
 log = get_pylogger(__name__)
 
+def _dino_head_split(dino_head, tensors: List[torch.Tensor]) -> List[torch.Tensor]:
+    if fmha is not None:
+        attn_bias, cat_inputs = fmha.BlockDiagonalMask.from_tensor_list(tensors)
+        return attn_bias.split(dino_head(cat_inputs))
+
+    sizes = [x.shape[1] for x in tensors]
+    cat_inputs = torch.cat(tensors, dim=1)
+    return list(dino_head(cat_inputs).split(sizes, dim=1))
+
 
 class XelaDINOv2PosModule(DINOv2Module):
     def __init__(
@@ -174,14 +183,14 @@ class XelaDINOv2PosModule(DINOv2Module):
         student_masked_patch_tokens.copy_(student_global_patch_tokens[ibot_mask_indices])
         student_masked_patch_tokens = student_masked_patch_tokens.flatten(0, 1)
 
-        _attn_bias, cat_inputs = fmha.BlockDiagonalMask.from_tensor_list(
+        after_head_list = _dino_head_split(
+            self.student_encoder_dict["dino_head"],
             [
                 student_global_cls_tokens.unsqueeze(0),
                 student_local_cls_tokens.unsqueeze(0),
                 student_masked_patch_tokens.unsqueeze(0),
-            ]
+            ],
         )
-        after_head_list = _attn_bias.split(self.student_encoder_dict["dino_head"](cat_inputs))
         (
             student_global_cls_tokens_after_head,
             student_local_cls_tokens_after_head,

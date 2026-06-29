@@ -8,14 +8,11 @@ from .xela_transformer import *  # noqa: F401
 from .xela_dual_pos_transformer import *  # noqa: F401
 from .cross_sensor_transformer import *  # noqa: F401
 from .brainco_transformer import *  # noqa: F401
+from .braInco_one_transformer import *  # noqa: F401
 from .multi_sensor_brainco_transformer import *  # noqa: F401
 from .multi_sensor_transformer import *  # noqa: F401
 from .angle_transformer import *  # noqa: F401
-<<<<<<< HEAD
 from .angle_ln_transformer import *  # noqa: F401
-=======
-from .finger_angle_transformer import *  # noqa: F401
->>>>>>> 147bb7cd1555763c451fd7e12fc01b4083a3d23c
 
 
 VIT_EMBED_DIMS = {

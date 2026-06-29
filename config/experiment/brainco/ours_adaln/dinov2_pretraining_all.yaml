@@ -6,23 +6,23 @@ defaults:
   - _self_
 
 model_size: tiny
-experiment_name: dinov2_all_${model_size}
+experiment_name: dinov2_all_adaln_${model_size}
 ckpt_path: ./
 
 wandb:
   entity: ryk9012-gwangju-institute-of-science-and-technology
   project: dinov2
-  group: dino_all_${model_size}
-  tags: ["all", "oakinkv2", "arctic", "taco", "hot3d", "${model_size}"]
+  group: dino_all_adaln_${model_size}
+  tags: ["all", "oakinkv2", "arctic", "taco", "hot3d", "adaln", "${model_size}"]
 
 trainer:
-  max_epochs: 500
+  max_epochs: 200
   validation_frequency: 50
 
 algorithm:
   centering: centering
   encoder:
-    _target_: tactile_ssl.model.angle_tiny
+    _target_: tactile_ssl.model.angle_adaln_tiny
     in_dim: 42              # 21 lh + 21 rh joints (contact stream)
     in_chans: 1             # contact channel
     pos_in_dim: 10          # 5 lh + 5 rh fingers (angle stream)

@@ -1,5 +1,5 @@
 train_dataloader:
-  batch_size: 128
+  batch_size: 512
   num_workers: 8
   shuffle: True
   drop_last: True
@@ -20,7 +20,7 @@ normalization:
 object_classes: null
 object_class_weights: null
 
-window_time: 0.03 # default 0.01 
+window_time: 0.01 # default 0.01 
 window_overlap: 0.0
 interpolating_freq: 100
 
@@ -43,7 +43,7 @@ dataset_list:
         window_time: ${data.window_time}
         window_overlap: ${data.window_overlap}
         interpolating_freq: ${data.interpolating_freq}
-        subtract_baseline: False
+        subtract_baseline: True
         smooth_data: False
         bias_noise_std: 0
         bias_range: 0
