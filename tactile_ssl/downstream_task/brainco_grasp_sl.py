@@ -29,6 +29,72 @@ from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, f1_score
 log = get_pylogger(__name__)
 
 
+def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+    x_even = x[..., ::2]
+    x_odd = x[..., 1::2]
+    return torch.stack((-x_odd, x_even), dim=-1).flatten(-2)
+
+
+class RotaryAttention(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 8,
+        qkv_bias: bool = False,
+        proj_bias: bool = True,
+        attn_drop: float = 0.0,
+        proj_drop: float = 0.0,
+        rope_base: float = 10000.0,
+        *args,
+        **kwargs,
+    ) -> None:
+        super().__init__()
+        if dim % num_heads != 0:
+            raise ValueError(f"dim={dim} must be divisible by num_heads={num_heads}")
+
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        if self.head_dim % 2 != 0:
+            raise ValueError(f"RoPE requires an even head_dim, got {self.head_dim}")
+
+        self.scale = self.head_dim**-0.5
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim, bias=proj_bias)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+        inv_freq = 1.0 / (rope_base ** (torch.arange(0, self.head_dim, 2).float() / self.head_dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    def _rope(self, q: torch.Tensor, k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        seq_len = q.shape[-2]
+        positions = torch.arange(seq_len, device=q.device, dtype=self.inv_freq.dtype)
+        freqs = torch.einsum("n,d->nd", positions, self.inv_freq)
+        cos = freqs.cos().repeat_interleave(2, dim=-1).to(dtype=q.dtype)[None, None, :, :]
+        sin = freqs.sin().repeat_interleave(2, dim=-1).to(dtype=q.dtype)[None, None, :, :]
+        return q * cos + _rotate_half(q) * sin, k * cos + _rotate_half(k) * sin
+
+    def forward(self, x: torch.Tensor, attn_bias=None, return_attn=False) -> torch.Tensor:
+        b, n, c = x.shape
+        qkv = self.qkv(x).reshape(b, n, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        q, k = self._rope(q, k)
+        q = q * self.scale
+
+        attn = q @ k.transpose(-2, -1)
+        if attn_bias is not None:
+            attn = attn + attn_bias
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+
+        out = (attn @ v).transpose(1, 2).reshape(b, n, c)
+        out = self.proj(out)
+        out = self.proj_drop(out)
+        if return_attn:
+            return attn
+        return out
+
+
 class BraincoGraspProbe(nn.Module):
     def __init__(
         self,
@@ -36,13 +102,15 @@ class BraincoGraspProbe(nn.Module):
         embed_dim=192,
         num_heads=3,
         mlp_ratio=4.0,
-        depth=1,
+        depth=0,
         norm_layer=nn.LayerNorm,
         init_std=0.02,
         qkv_bias=True,
+        max_seq_len=100,
     ):
         super().__init__()
         self.num_classes = num_classes
+        self.max_seq_len = max_seq_len
 
         self.blocks = nn.ModuleList(
             [
@@ -60,8 +128,8 @@ class BraincoGraspProbe(nn.Module):
         self.init_std = init_std
         self.probe = nn.Linear(embed_dim, self.num_classes)
 
-        self.pos_embed_fn = SinusoidalEmbed(100, 1, embed_dim)
-        attn_bias = torch.ones(1, 1, 100, 100)
+        self.pos_embed_fn = SinusoidalEmbed(max_seq_len, 1, embed_dim)
+        attn_bias = torch.ones(1, 1, max_seq_len, max_seq_len)
         attn_bias = attn_bias.tril()
         attn_bias.masked_fill_(attn_bias == 0, float("-inf"))
         attn_bias.masked_fill_(attn_bias == 1, 0)
@@ -81,17 +149,105 @@ class BraincoGraspProbe(nn.Module):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
+    def _causal_attn_bias(self, seq_len: int, device: torch.device) -> torch.Tensor:
+        if seq_len <= self.attn_bias.shape[-1]:
+            return self.attn_bias[:, :, :seq_len, :seq_len]
+
+        attn_bias = torch.ones(1, 1, seq_len, seq_len, device=device)
+        attn_bias = attn_bias.tril()
+        attn_bias.masked_fill_(attn_bias == 0, float("-inf"))
+        attn_bias.masked_fill_(attn_bias == 1, 0)
+        return attn_bias
+
     def forward(self, z):
         b, t, c = z.shape
 
         pos_embed = self.pos_embed_fn(z.device).float().unsqueeze(0)
         z = z + pos_embed[:, :t, :]
 
+        attn_bias = self._causal_attn_bias(t, z.device)
         for block in self.blocks:
-            z = block(z, self.attn_bias[:, :, :t, :t])
+            z = block(z, attn_bias)
         
         y = self.probe(z[:, -1, :])
         return y
+
+
+class BraincoGraspRoPEProbe(BraincoGraspProbe):
+    def __init__(
+        self,
+        num_classes=2,
+        embed_dim=192,
+        num_heads=3,
+        mlp_ratio=4.0,
+        depth=0,
+        norm_layer=nn.LayerNorm,
+        init_std=0.02,
+        qkv_bias=True,
+        max_seq_len=100,
+    ):
+        super().__init__(
+            num_classes=num_classes,
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            depth=0,
+            norm_layer=norm_layer,
+            init_std=init_std,
+            qkv_bias=qkv_bias,
+            max_seq_len=max_seq_len,
+        )
+        del self.pos_embed_fn
+        self.blocks = nn.ModuleList(
+            [
+                Block(
+                    dim=embed_dim,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    norm_layer=norm_layer,
+                    drop_path=0.1,
+                    attn_class=RotaryAttention,
+                )
+                for _ in range(depth)
+            ]
+        )
+        self.apply(self._init_weights)
+
+    def forward(self, z):
+        b, t, c = z.shape
+
+        attn_bias = self._causal_attn_bias(t, z.device)
+        for block in self.blocks:
+            z = block(z, attn_bias)
+
+        y = self.probe(z[:, -1, :])
+        return y
+
+
+class MeanPoolProbe(nn.Module):
+    def __init__(
+        self,
+        num_classes=2,
+        embed_dim=192,
+        init_std=0.02,
+        **kwargs,
+    ):
+        super().__init__()
+        self.num_classes = num_classes
+        self.init_std = init_std
+        self.probe = nn.Linear(embed_dim, self.num_classes)
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            torch.nn.init.trunc_normal_(m.weight, std=self.init_std)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, z):
+        z = z.mean(dim=1)
+        return self.probe(z)
 
 
 class BraincoGraspDetectionSLModule(SLModule):
@@ -111,6 +267,8 @@ class BraincoGraspDetectionSLModule(SLModule):
         lora_alpha: float = 1.0,
         lora_dropout: float = 0.0,
         lora_target_modules: tuple = ("qkv", "proj"),
+        encoder_warmup_fine_tune_sensor_epochs: int = 0,
+        encoder_warmup_fine_tune_sensor_shallow_blocks: Optional[int] = None,
     ):
         super().__init__(
             model_encoder=model_encoder,
@@ -126,6 +284,35 @@ class BraincoGraspDetectionSLModule(SLModule):
             lora_dropout=lora_dropout,
             lora_target_modules=lora_target_modules,
         )
+        self.encoder_warmup_fine_tune_sensor_epochs = int(encoder_warmup_fine_tune_sensor_epochs)
+        self.encoder_warmup_fine_tune_sensor_shallow_blocks = encoder_warmup_fine_tune_sensor_shallow_blocks
+        self._encoder_warmup_mode = None
+        self._encoder_warmup_epoch_idx = 0
+        if self.encoder_warmup_fine_tune_sensor_epochs < 0:
+            raise ValueError(
+                "encoder_warmup_fine_tune_sensor_epochs must be >= 0, "
+                f"got {self.encoder_warmup_fine_tune_sensor_epochs}"
+            )
+        if self.encoder_warmup_fine_tune_sensor_epochs > 0:
+            if not hasattr(self.model_encoder, "_apply_fine_tune_sensor"):
+                raise ValueError(
+                    "encoder_warmup_fine_tune_sensor_epochs requires an encoder "
+                    "with _apply_fine_tune_sensor()."
+                )
+            if not self.train_encoder:
+                log.warning(
+                    "encoder_warmup_fine_tune_sensor_epochs is set but train_encoder=False; "
+                    "the encoder will stay frozen."
+                )
+            else:
+                # Optimizer groups are built before the first train epoch. Keep the
+                # full encoder eligible here, then apply the warmup freeze in the hook.
+                self.model_encoder.requires_grad_(True)
+                self.model_encoder.train()
+                log.info(
+                    "Encoder warmup fine_tune_sensor schedule enabled for "
+                    f"{self.encoder_warmup_fine_tune_sensor_epochs} epochs."
+                )
         self.loss_fn = nn.CrossEntropyLoss()
         self.val_preds = []
         self.val_labels = []
@@ -144,11 +331,59 @@ class BraincoGraspDetectionSLModule(SLModule):
             embed_dim=embed_dim,
             num_heads=num_heads,
         )
-        self.classifier = BraincoGraspProbe(
-            num_classes=self.num_classes,
-            embed_dim=embed_dim,
-            num_heads=num_heads,
-        )
+        if isinstance(model_task, (BraincoGraspProbe, MeanPoolProbe)):
+            self.classifier = model_task
+        else:
+            self.classifier = BraincoGraspProbe(
+                num_classes=self.num_classes,
+                embed_dim=embed_dim,
+                num_heads=num_heads,
+            )
+        print(self.classifier)
+
+    def _log_encoder_trainable_params(self, label: str):
+        n_trainable = sum(p.numel() for p in self.model_encoder.parameters() if p.requires_grad)
+        n_total = sum(p.numel() for p in self.model_encoder.parameters())
+        log.info(f"{label}: encoder trainable params {n_trainable:,} / {n_total:,}")
+
+    def _set_encoder_warmup_mode(self, mode: str):
+        if self._encoder_warmup_mode == mode:
+            return
+
+        if mode == "fine_tune_sensor":
+            if self.encoder_warmup_fine_tune_sensor_shallow_blocks is not None and hasattr(
+                self.model_encoder, "fine_tune_sensor_shallow_blocks"
+            ):
+                self.model_encoder.fine_tune_sensor_shallow_blocks = int(
+                    self.encoder_warmup_fine_tune_sensor_shallow_blocks
+                )
+            self.model_encoder._apply_fine_tune_sensor()
+            self.model_encoder.train()
+            self._log_encoder_trainable_params("Encoder warmup fine_tune_sensor")
+        elif mode == "full":
+            self.model_encoder.requires_grad_(True)
+            self.model_encoder.train()
+            self._log_encoder_trainable_params("Encoder warmup finished, full fine-tune")
+        else:
+            raise ValueError(f"Unknown encoder warmup mode: {mode}")
+
+        self._encoder_warmup_mode = mode
+
+    def on_train_epoch_start(self, trainer_instance=None):
+        super().on_train_epoch_start(trainer_instance)
+        if not self.train_encoder or self.encoder_warmup_fine_tune_sensor_epochs <= 0:
+            return
+
+        if trainer_instance is not None:
+            epoch = int(trainer_instance.current_epoch)
+        else:
+            epoch = self._encoder_warmup_epoch_idx
+            self._encoder_warmup_epoch_idx += 1
+
+        if epoch < self.encoder_warmup_fine_tune_sensor_epochs:
+            self._set_encoder_warmup_mode("fine_tune_sensor")
+        else:
+            self._set_encoder_warmup_mode("full")
 
     def encode(self, sensor, sensor_poses, mask=None):
         """Encode windowed tactile data through BraincoTransformer.
@@ -190,6 +425,7 @@ class BraincoGraspDetectionSLModule(SLModule):
 
         # Encode: (B, num_windows, embed_dim)
         embeddings = self.encode(sensor, sensor_poses, mask)
+        print(embeddings.shape)
 
         # Apply classifier sequence modeling: expects (B, seq_len, embed_dim)
         if self.train_encoder:

@@ -72,6 +72,80 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
 
     dataset = hydra.utils.instantiate(data_cfg.dataset)
 
+    if data_cfg.get("val_dataset") is not None:
+        val_dataset = hydra.utils.instantiate(data_cfg.val_dataset)
+
+        train_indices = list(range(len(dataset.windows)))
+        val_indices   = list(range(len(val_dataset.windows)))
+
+        # ── Normalization: compute signal stats from train joint_contact ──────
+        all_contact = torch.stack([dataset.windows[i]["joint_contact"] for i in train_indices])
+        NUM_CHANS = all_contact.shape[-1]
+        signal_mean = torch.zeros(NUM_CHANS)
+        signal_std  = torch.ones(NUM_CHANS)
+        for c in range(NUM_CHANS):
+            valid = all_contact[..., c][all_contact[..., c] >= 0].float()
+            if valid.numel() > 0:
+                signal_mean[c] = valid.mean()
+                signal_std[c]  = valid.std().clamp(min=1e-6)
+
+        dataset.computed_signal_mean = signal_mean
+        dataset.computed_signal_std  = signal_std
+        val_dataset.computed_signal_mean = signal_mean
+        val_dataset.computed_signal_std  = signal_std
+
+        CLASS_NAMES = {0: "Fail", 1: "Success"}
+
+        def _ep_names(dset):
+            return [Path(ep["path"]).parent.name + "/" + Path(ep["path"]).name for ep in dset.episode_data]
+
+        def _dist(dset, indices):
+            return Counter(dset.windows[i]["label"].item() for i in indices)
+
+        lines = [
+            "\n=== Explicit Train/Val Dataset Split ===",
+            f"  Train: {len(dataset.episode_data)} episodes",
+            *[f"    [train] {n}" for n in _ep_names(dataset)],
+            f"  Val:   {len(val_dataset.episode_data)} episodes",
+            *[f"    [val]   {n}" for n in _ep_names(val_dataset)],
+            "Computing normalization stats from training data ...",
+            f"[NormStats] signal_mean: {signal_mean.tolist()}",
+            f"[NormStats] signal_std:  {signal_std.tolist()}",
+            "  (finger_angles: NOT normalized)",
+            "=== Class Distribution ===",
+        ]
+        for tag, dset, idx in [("Train", dataset, train_indices), ("Val", val_dataset, val_indices)]:
+            d = _dist(dset, idx)
+            lines.append(f"  {tag}:")
+            for cls in sorted(d):
+                cnt = d[cls]
+                lines.append(f"    [{cls}] {CLASS_NAMES[cls]:8s}: {cnt:5d}  ({100*cnt/len(idx):.1f}%)")
+        lines.append("=" * 26)
+
+        split_log = "\n".join(lines)
+        print(split_log)
+        log_path = Path(cfg.paths.output_dir) / "split_explicit_val.txt"
+        log_path.write_text(split_log)
+
+        g = torch.Generator()
+        g.manual_seed(cfg.get("seed", 42))
+
+        train_dset = data.Subset(dataset, train_indices)
+        val_dset   = data.Subset(val_dataset, val_indices)
+
+        if data_cfg.get("train_data_budget", 1.0) < 1.0:
+            budget = int(len(train_dset) * data_cfg.train_data_budget)
+            train_dset, _ = data.random_split(train_dset, [budget, len(train_dset) - budget], generator=g)
+        if data_cfg.get("val_data_budget", 1.0) < 1.0:
+            budget = int(len(val_dset) * data_cfg.val_data_budget)
+            val_dset, _ = data.random_split(val_dset, [budget, len(val_dset) - budget], generator=g)
+
+        print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val")
+
+        train_loader = data.DataLoader(train_dset, generator=g, **dict(data_cfg.train_dataloader))
+        val_loader   = data.DataLoader(val_dset,                **dict(data_cfg.val_dataloader))
+        return train_loader, val_loader
+
     # ── Episode → window index map ────────────────────────────────────────────
     ep_window_start: dict = {}
     current = 0
@@ -356,6 +430,11 @@ def train(cfg: DictConfig):
 
 @hydra.main(version_base="1.3", config_path="config", config_name="default_task.yaml")
 def main(cfg: DictConfig):
+    if cfg.data.get("val_dataset") is not None and cfg.get("all_split", False):
+        logger.warning("data.val_dataset is set; ignoring all_split because validation is explicit.")
+        train(cfg)
+        return
+
     if cfg.get("all_split", False):
         num_folds = int(cfg.get("num_folds", 5))
         base_id   = cfg.wandb.id

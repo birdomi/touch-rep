@@ -282,7 +282,7 @@ class Trainer:
 
         """
         self.training_state = "train"
-        module.on_train_epoch_start()
+        module.on_train_epoch_start(self)
         self.fabric.call("on_train_epoch_start")
 
         iterable = self.progbar_wrapper(

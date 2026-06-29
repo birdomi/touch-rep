@@ -18,7 +18,7 @@ sensor: brainco_angle_grasp_prediction
 train_data_budget: 1.0
 val_data_budget: 1.0
 
-window_time: 0.15
+window_time: 0.3
 window_overlap: 0.0
 interpolating_freq: 100
 

@@ -48,27 +48,28 @@ task:
     causal: False
 
   model_task:
-    _target_: tactile_ssl.downstream_task.AttentiveClassifier
+    _target_: tactile_ssl.downstream_task.MeanPoolProbe
     embed_dim: 192
     num_heads: 3
     mlp_ratio: 4.0
-    depth: 1
+    depth: 2
     num_classes: 2
-    complete_block: True
 
   checkpoint_encoder: ~
   train_encoder: true
   encoder_type: dinov2
+  encoder_warmup_fine_tune_sensor_epochs: 0
+  encoder_warmup_fine_tune_sensor_shallow_blocks: ~
 
   optim_cfg:
     _partial_: True
     _target_: torch.optim.AdamW
-    lr: 1e-4
-    weight_decay: 1e-4
+    lr: 1e-5
+    weight_decay: 1e-6
 
-  scheduler_cfg:
-    _partial_: True
-    _target_: tactile_ssl.model.custom_scheduler.WarmupCosineScheduler
-    warmup_epochs: 0
-    start_lr: 1e-4
-    final_lr: 1e-6
+  # scheduler_cfg:
+  #   _partial_: True
+  #   _target_: tactile_ssl.model.custom_scheduler.WarmupCosineScheduler
+  #   warmup_epochs: 0
+  #   start_lr: 1e-4
+  #   final_lr: 1e-6

@@ -6,11 +6,11 @@ This variant keeps the dual-stream structure from :mod:`angle_transformer`:
   angle  : finger-angle stream processed by ``self.blocks``
 
 The difference from ``AngleTransformer`` is the fusion stage. Sensor tokens are
-not concatenated and then fed through the shared blocks. Instead, the pre-fusion
-sensor output is pooled into a global condition and used by AdaLayerNorm inside
-the angle-stream transformer blocks. The final token sequence still appends the
-sensor tokens after the conditioned angle tokens so downstream code that pools
-``x_tokens`` can consume both streams.
+not concatenated and then fed through the shared blocks. Instead, each finger
+angle token is conditioned by its corresponding tactile token through
+AdaLayerNorm inside the angle-stream transformer blocks. The final token
+sequence still appends the sensor tokens after the conditioned angle tokens so
+downstream code that pools ``x_tokens`` can consume both streams.
 """
 
 from functools import partial
@@ -21,7 +21,7 @@ import torch.nn as nn
 
 from tactile_ssl.utils.logging import get_pylogger
 
-from .angle_transformer import AngleTransformer
+from .angle_transformer import FULL_SKELETON_SIZE, TACTILE_SENSOR_IDXS, AngleTransformer
 from .layers import MemEffAttention, Mlp, SwiGLUFFNFused, init_weights_vit_timm
 from .layers.drop_path import DropPath
 from .layers.layer_scale import LayerScale
@@ -30,7 +30,7 @@ log = get_pylogger(__name__)
 
 
 class AdaLayerNorm(nn.Module):
-    """LayerNorm modulated by a per-sample global condition."""
+    """LayerNorm modulated by a per-sample or per-token condition."""
 
     def __init__(
         self,
@@ -146,7 +146,8 @@ class AngleAdaLNTransformer(AngleTransformer):
 
     ``sensor_block`` is identical to ``AngleTransformer``. ``self.blocks`` are
     replaced with ``AdaLNBlock`` and operate on the angle/register stream only.
-    The sensor output is pooled to ``(B, D)`` and passed as the AdaLN condition.
+    Each angle token receives the tactile token from the corresponding finger
+    as its AdaLN condition.
     """
 
     def __init__(
@@ -209,9 +210,79 @@ class AngleAdaLNTransformer(AngleTransformer):
             nn.init.zeros_(block.gate[-1].weight)
             nn.init.zeros_(block.gate[-1].bias)
 
-    def sensor_condition(self, sen: torch.Tensor) -> torch.Tensor:
-        """Pool sensor tokens into the global AdaLN condition."""
-        return sen.mean(dim=1)
+    def _angle_to_sensor_indices(self, device: torch.device) -> torch.Tensor:
+        """Return sensor indices corresponding to each finger-angle index."""
+        if self.in_dim == self.pos_in_dim:
+            return torch.arange(self.pos_in_dim, device=device)
+
+        if self.in_dim == FULL_SKELETON_SIZE and self.pos_in_dim == len(TACTILE_SENSOR_IDXS):
+            return torch.tensor(TACTILE_SENSOR_IDXS, device=device, dtype=torch.long)
+
+        raise ValueError(
+            "AngleAdaLNTransformer needs a known angle-to-sensor mapping. "
+            f"Got in_dim={self.in_dim}, pos_in_dim={self.pos_in_dim}."
+        )
+
+    def sensor_condition(
+        self,
+        sen: torch.Tensor,
+        pos: torch.Tensor,
+        sen_mask: Optional[torch.Tensor],
+        pos_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """Build per-token AdaLN conditions for angle/register tokens.
+
+        Register tokens use the pooled sensor condition. Angle tokens use the
+        tactile token for the same finger and same time chunk. When sensor and
+        angle masks are sampled independently and the corresponding tactile
+        token is not present, the pooled sensor condition is used as fallback.
+        """
+        B, _, D = sen.shape
+        r = self.num_register_tokens
+        global_cond = sen.mean(dim=1)
+        angle_to_sensor = self._angle_to_sensor_indices(sen.device)
+
+        if sen_mask is None:
+            chunked_t = sen.shape[1] // self.in_dim
+            sen_by_sensor = sen.view(B, chunked_t, self.in_dim, D)
+            angle_cond = sen_by_sensor.index_select(dim=2, index=angle_to_sensor)
+        else:
+            if pos_mask is None:
+                raise ValueError("pos_mask is required when sen_mask is provided")
+
+            ns = sen_mask.shape[-1]
+            np_ = pos_mask.shape[-1]
+            chunked_t = sen.shape[1] // ns
+
+            sen_by_keep = sen.view(B, chunked_t, ns, D)
+            sen_keep = sen_mask.reshape(B, ns).to(device=sen.device, dtype=torch.long)
+            pos_keep = pos_mask.reshape(B, np_).to(device=sen.device, dtype=torch.long)
+            target_sensor = angle_to_sensor[pos_keep]
+
+            matches = sen_keep[:, None, :] == target_sensor[:, :, None]
+            has_match = matches.any(dim=-1)
+            gather_idx = matches.to(dtype=torch.long).argmax(dim=-1)
+
+            gather_idx = gather_idx[:, None, :, None].expand(-1, chunked_t, -1, D)
+            angle_cond = torch.gather(sen_by_keep, dim=2, index=gather_idx)
+
+            fallback = global_cond[:, None, None, :].expand(-1, chunked_t, np_, -1)
+            angle_cond = torch.where(has_match[:, None, :, None], angle_cond, fallback)
+
+        angle_cond = angle_cond.reshape(B, -1, D)
+        if r > 0:
+            reg_cond = global_cond[:, None, :].expand(-1, r, -1)
+            cond = torch.cat([reg_cond, angle_cond], dim=1)
+        else:
+            cond = angle_cond
+
+        if cond.shape[1] != pos.shape[1]:
+            raise RuntimeError(
+                f"AdaLN condition length {cond.shape[1]} does not match "
+                f"angle token length {pos.shape[1]}"
+            )
+        print(cond.shape)
+        return cond
 
     def transform_concat(
         self,
@@ -223,31 +294,39 @@ class AngleAdaLNTransformer(AngleTransformer):
     ):
         """Condition angle blocks with sensor output, then append sensor tokens.
 
-        Sensor tokens are not inputs to ``self.blocks``. They only produce the
-        global AdaLN condition for the angle/register stream.
+        Sensor tokens are not inputs to ``self.blocks``. They provide per-finger
+        AdaLN conditions for the angle/register stream.
         """
         sen_pe = self._full_embed(self.contact_pos_embed)
         ang_pe = self._full_embed(self.angle_pos_embed)
+        r = self.num_register_tokens
+        sen_cond_src = sen
 
         if sen_mask is not None:
             ns = sen_mask.shape[-1]
-            se = sen_pe[sen_mask.view(-1, ns)]
+            sen_t = sen.shape[1] // ns
+            se = sen_pe[sen_mask.reshape(-1, ns)]
+            se = se[:, None].expand(-1, sen_t, -1, -1).reshape(sen.shape)
             sen = sen + se
 
             np_ = pos_mask.shape[-1]
-            ae = ang_pe[pos_mask.view(-1, np_)]
-            pos[:, 1:] = pos[:, 1:] + ae
+            pos_t = (pos.shape[1] - r) // np_
+            ae = ang_pe[pos_mask.reshape(-1, np_)]
+            ae = ae[:, None].expand(-1, pos_t, -1, -1).reshape(pos[:, r:].shape)
+            pos[:, r:] = pos[:, r:] + ae
         else:
-            sen = sen + sen_pe
-            pos[:, 1:] = pos[:, 1:] + ang_pe
+            sen_t = sen.shape[1] // self.in_dim
+            pos_t = (pos.shape[1] - r) // self.pos_in_dim
+            sen = sen + sen_pe.repeat(sen_t, 1)
+            pos[:, r:] = pos[:, r:] + ang_pe.repeat(pos_t, 1)
 
-        cond = self.sensor_condition(sen)
+        cond = self.sensor_condition(sen_cond_src, pos, sen_mask, pos_mask)
         for blk in self.blocks:
             pos = blk(pos, cond, attn_bias=None)
 
-        fused = torch.cat([pos, sen], dim=1)
-        x_norm = self.norm(fused)
-        return fused, x_norm
+        # fused = torch.cat([pos, sen], dim=1)
+        x_norm = self.norm(pos)
+        return pos, x_norm
 
 
 def angle_adaln_tiny(

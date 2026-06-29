@@ -64,13 +64,73 @@ def get_dataloader_vision(cfg: DictConfig):
     fold      = int(cfg.get("fold", 0))
     num_folds = int(cfg.get("num_folds", 5))
 
-    dataset = BraincoGraspVisionDataset(
-        config=data_cfg,
-        data_path=data_cfg.data_path,
-        num_frames_per_sample=int(data_cfg.get("num_frames_per_sample", 4)),
-        img_size=int(data_cfg.get("img_size", 224)),
-        augment=bool(data_cfg.get("augment", False)),
-    )
+    def _make_dataset(dataset_cfg=None):
+        if dataset_cfg is not None:
+            return hydra.utils.instantiate(dataset_cfg)
+        return BraincoGraspVisionDataset(
+            config=data_cfg,
+            data_path=data_cfg.data_path,
+            num_frames_per_sample=int(data_cfg.get("num_frames_per_sample", 4)),
+            img_size=int(data_cfg.get("img_size", 224)),
+            augment=bool(data_cfg.get("augment", False)),
+        )
+
+    dataset = _make_dataset(data_cfg.get("dataset"))
+
+    if data_cfg.get("val_dataset") is not None:
+        val_dataset = _make_dataset(data_cfg.val_dataset)
+
+        train_indices = list(range(len(dataset.windows)))
+        val_indices   = list(range(len(val_dataset.windows)))
+
+        CLASS_NAMES = {0: "Fail", 1: "Success"}
+
+        def _ep_names(dset):
+            return [Path(ep["path"]).parent.name + "/" + Path(ep["path"]).name for ep in dset.episode_data]
+
+        def _class_dist(dset, indices):
+            return Counter(dset.windows[i]["label"].item() for i in indices)
+
+        lines = [
+            "\n=== Vision Explicit Train/Val Dataset Split ===",
+            f"  Train: {len(dataset.episode_data)} episodes",
+            *[f"    [train] {name}" for name in _ep_names(dataset)],
+            f"  Val:   {len(val_dataset.episode_data)} episodes",
+            *[f"    [val]   {name}" for name in _ep_names(val_dataset)],
+            "=== Class Distribution ===",
+        ]
+        for tag, dset, indices in [("Train", dataset, train_indices), ("Val", val_dataset, val_indices)]:
+            dist = _class_dist(dset, indices)
+            lines.append(f"  {tag}:")
+            for cls in sorted(dist):
+                cnt = dist[cls]
+                lines.append(f"    [{cls}] {CLASS_NAMES.get(cls, cls):10s}: {cnt:5d}  ({100*cnt/len(indices):.1f}%)")
+        lines.append("=" * 26)
+
+        split_log = "\n".join(lines)
+        print(split_log)
+        split_log_path = Path(cfg.paths.output_dir) / "split_explicit_val_vision.txt"
+        split_log_path.write_text(split_log)
+
+        train_dset = data.Subset(dataset, train_indices)
+        val_dset   = data.Subset(val_dataset, val_indices)
+
+        g = torch.Generator()
+        g.manual_seed(cfg.seed) if cfg.get("seed") else g.seed()
+
+        if data_cfg.get("train_data_budget", 1.0) < 1.0:
+            n = int(len(train_dset) * data_cfg.train_data_budget)
+            train_dset, _ = data.random_split(train_dset, [n, len(train_dset) - n], generator=g)
+
+        if data_cfg.get("val_data_budget", 1.0) < 1.0:
+            n = int(len(val_dset) * data_cfg.val_data_budget)
+            val_dset, _ = data.random_split(val_dset, [n, len(val_dset) - n], generator=g)
+
+        print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val")
+
+        train_loader = data.DataLoader(train_dset, **dict(data_cfg.train_dataloader))
+        val_loader   = data.DataLoader(val_dset,   **dict(data_cfg.val_dataloader))
+        return train_loader, val_loader
 
     # Sort episodes by episode number
     def _ep_sort_key(ep):
@@ -196,13 +256,27 @@ def train(cfg: DictConfig) -> dict:
     trainer.fit(model, train_loader, val_loader, ckpt_path=cfg.ckpt_path)
     wb.finish()
 
-    return getattr(model, "last_val_metrics", {})
+    last = getattr(model, "last_val_metrics", {})
+    best = getattr(model, "best_val_metrics", {})
+    print(f"\n{'='*40}")
+    print("  VISION TRAINING COMPLETE")
+    print(f"{'='*40}")
+    print(f"  Last  — Acc: {last.get('accuracy', float('nan')):.4f}  F1: {last.get('f1', float('nan')):.4f}")
+    print(f"  Best  — Acc: {best.get('accuracy', float('nan')):.4f}  F1: {best.get('f1', float('nan')):.4f}")
+    print(f"{'='*40}\n")
+
+    return last
 
 
 # ── main ──────────────────────────────────────────────────────────────────
 
 @hydra.main(version_base="1.3", config_path="config", config_name="default_task.yaml")
 def main(cfg: DictConfig):
+    if cfg.data.get("val_dataset") is not None and cfg.get("all_split", False):
+        logger.warning("data.val_dataset is set; ignoring all_split because validation is explicit.")
+        train(cfg)
+        return
+
     if cfg.get("all_split", False):
         num_folds     = int(cfg.get("num_folds", 5))
         base_wandb_id = cfg.wandb.id

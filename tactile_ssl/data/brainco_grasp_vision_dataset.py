@@ -16,6 +16,7 @@ import torch
 import torch.utils.data as data
 from PIL import Image
 import torchvision.transforms as T
+import torchvision.transforms.functional as TF
 from omegaconf import DictConfig
 
 from tactile_ssl.utils.logging import get_pylogger
@@ -50,6 +51,9 @@ class BraincoGraspVisionDataset(data.Dataset):
         super().__init__()
         self.data_path = Path(data_path)
         self.num_frames_per_sample = num_frames_per_sample
+        self.img_size = int(img_size)
+        self.crop_mode = str(config.get("crop_mode", "resize"))
+        self.crop_size = int(config.get("crop_size", self.img_size))
 
         # Window parameters (kept identical to tactile dataset)
         self.window_time = config.window_time
@@ -60,10 +64,12 @@ class BraincoGraspVisionDataset(data.Dataset):
         self.data_roots = self._get_data_roots(config, data_path)
 
         # Transforms
-        if augment:
+        if self.crop_mode == "bottom_center":
+            self.transform = self._build_bottom_center_transform(augment)
+        elif augment:
             self.transform = T.Compose([
-                T.Resize((img_size + 32, img_size + 32)),
-                T.RandomCrop(img_size),
+                T.Resize((self.img_size + 32, self.img_size + 32)),
+                T.RandomCrop(self.img_size),
                 T.RandomHorizontalFlip(),
                 T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
                 T.ToTensor(),
@@ -71,7 +77,7 @@ class BraincoGraspVisionDataset(data.Dataset):
             ])
         else:
             self.transform = T.Compose([
-                T.Resize((img_size, img_size)),
+                T.Resize((self.img_size, self.img_size)),
                 T.ToTensor(),
                 T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ])
@@ -85,6 +91,38 @@ class BraincoGraspVisionDataset(data.Dataset):
             f"BraincoGraspVisionDataset: {len(self.episode_data)} episodes, "
             f"{len(self.windows)} total windows."
         )
+
+    def _build_bottom_center_transform(self, augment: bool):
+        transforms = []
+        if augment:
+            transforms.extend([
+                T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+                T.RandomHorizontalFlip(),
+            ])
+        transforms.extend([
+            T.Lambda(self._bottom_center_crop),
+            T.ToTensor(),
+            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        ])
+        return T.Compose(transforms)
+
+    def _bottom_center_crop(self, img: Image.Image) -> Image.Image:
+        width, height = img.size
+        crop_size = self.crop_size
+
+        if width < crop_size or height < crop_size:
+            scale = max(crop_size / width, crop_size / height)
+            new_width = max(crop_size, int(round(width * scale)))
+            new_height = max(crop_size, int(round(height * scale)))
+            img = TF.resize(img, [new_height, new_width])
+            width, height = img.size
+
+        left = max(0, (width - crop_size) // 2)
+        top = max(0, height - crop_size)
+        cropped = TF.crop(img, top, left, crop_size, crop_size)
+        if crop_size != self.img_size:
+            cropped = TF.resize(cropped, [self.img_size, self.img_size])
+        return cropped
 
     def _discover_episodes(self):
         episodes = []
