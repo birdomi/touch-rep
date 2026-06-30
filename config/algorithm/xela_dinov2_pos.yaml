@@ -46,8 +46,8 @@ lr_scheduler_cfg:
 wd_scheduler_cfg:
   _partial_: True
   _target_: tactile_ssl.model.custom_scheduler.CosineWDSchedule
-  final_weight_decay: 0.4
-  ref_weight_decay: 0.04
+  final_weight_decay: 0.04
+  ref_weight_decay: 0.004
   T_max: ???
 
 online_probes:

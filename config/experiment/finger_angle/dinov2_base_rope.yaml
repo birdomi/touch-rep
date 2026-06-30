@@ -1,0 +1,15 @@
+# @package _global_
+
+defaults:
+  - /experiment/finger_angle/dinov2_base
+  - _self_
+
+experiment_name: finger_angle_dinov2_hot3d_${model_size}_rope
+
+wandb:
+  group: dino_hot3d_vectors_${model_size}_rope
+  tags: ["hot3d", "${model_size}", "rope"]
+
+algorithm:
+  encoder:
+    pos_embed_fn: rope

@@ -41,6 +41,54 @@ except ImportError:
     warnings.warn("xFormers is not available (Attention)")
 
 
+def _apply_rope(x: Tensor, positions: Tensor, seq_dim: int, base: float = 10000.0) -> Tensor:
+    head_dim = x.shape[-1]
+    rot_dim = (head_dim // 2) * 2
+    if positions is None or rot_dim == 0:
+        return x
+
+    valid = positions.to(device=x.device) >= 0
+    pos = positions.to(device=x.device).clamp_min(0).float()
+    inv_freq = 1.0 / (
+        base ** (torch.arange(0, rot_dim, 2, device=x.device, dtype=torch.float32) / rot_dim)
+    )
+    freqs = torch.einsum("...n,d->...nd", pos, inv_freq)
+    cos = freqs.cos().to(dtype=x.dtype)
+    sin = freqs.sin().to(dtype=x.dtype)
+
+    if seq_dim == 2:
+        if cos.dim() == 2:
+            cos = cos.unsqueeze(0)
+            sin = sin.unsqueeze(0)
+            valid = valid.unsqueeze(0)
+        cos = cos.unsqueeze(1)
+        sin = sin.unsqueeze(1)
+        valid = valid.unsqueeze(1).unsqueeze(-1)
+    elif seq_dim == 1:
+        if cos.dim() == 2:
+            cos = cos.unsqueeze(0)
+            sin = sin.unsqueeze(0)
+            valid = valid.unsqueeze(0)
+        cos = cos.unsqueeze(2)
+        sin = sin.unsqueeze(2)
+        valid = valid.unsqueeze(2).unsqueeze(-1)
+    else:
+        raise ValueError(f"Unsupported RoPE sequence dim: {seq_dim}")
+
+    cos = torch.where(valid, cos, torch.ones_like(cos))
+    sin = torch.where(valid, sin, torch.zeros_like(sin))
+
+    x_rot = x[..., :rot_dim]
+    x_pass = x[..., rot_dim:]
+    x_even = x_rot[..., 0::2]
+    x_odd = x_rot[..., 1::2]
+    x_rot = torch.stack(
+        (x_even * cos - x_odd * sin, x_even * sin + x_odd * cos),
+        dim=-1,
+    ).flatten(-2)
+    return torch.cat((x_rot, x_pass), dim=-1)
+
+
 class Attention(nn.Module):
     def __init__(
         self,
@@ -63,11 +111,14 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x: Tensor, attn_bias=None, return_attn=False) -> Tensor:
+    def forward(self, x: Tensor, attn_bias=None, return_attn=False, rope_positions=None) -> Tensor:
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
 
         q, k, v = qkv[0] * self.scale, qkv[1], qkv[2]
+        if rope_positions is not None:
+            q = _apply_rope(q, rope_positions, seq_dim=2)
+            k = _apply_rope(k, rope_positions, seq_dim=2)
         attn = q @ k.transpose(-2, -1)
         if attn_bias is not None:
             attn += attn_bias
@@ -84,18 +135,21 @@ class Attention(nn.Module):
 
 
 class MemEffAttention(Attention):
-    def forward(self, x: Tensor, attn_bias=None, return_attn=False) -> Tensor:
-        if not XFORMERS_AVAILABLE:
+    def forward(self, x: Tensor, attn_bias=None, return_attn=False, rope_positions=None) -> Tensor:
+        if not XFORMERS_AVAILABLE or not x.is_cuda:
             if attn_bias is not None:
                 raise AssertionError("xFormers is required for using nested tensors")
-            return super().forward(x, attn_bias, return_attn=return_attn)
+            return super().forward(x, attn_bias, return_attn=return_attn, rope_positions=rope_positions)
         if return_attn:
-            return super().forward(x, attn_bias, return_attn=True)
+            return super().forward(x, attn_bias, return_attn=True, rope_positions=rope_positions)
 
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads)
 
         q, k, v = unbind(qkv, 2)
+        if rope_positions is not None:
+            q = _apply_rope(q, rope_positions, seq_dim=1)
+            k = _apply_rope(k, rope_positions, seq_dim=1)
 
         if attn_bias is not None:
             attn_bias = attn_bias.expand(B, -1, -1, -1)

@@ -87,15 +87,17 @@ class Block(nn.Module):
 
         self.sample_drop_ratio = drop_path
 
-    def forward(self, x: Tensor, attn_bias=None, return_attn=False) -> Tensor:
-        def attn_residual_func(x: Tensor, attn_bias=None) -> Tensor:
-            return self.ls1(self.attn(self.norm1(x), attn_bias=attn_bias))
+    def forward(self, x: Tensor, attn_bias=None, return_attn=False, rope_positions=None) -> Tensor:
+        def attn_residual_func(x: Tensor, attn_bias=None, rope_positions=None) -> Tensor:
+            kwargs = {} if rope_positions is None else {"rope_positions": rope_positions}
+            return self.ls1(self.attn(self.norm1(x), attn_bias=attn_bias, **kwargs))
 
         def ffn_residual_func(x: Tensor) -> Tensor:
             return self.ls2(self.mlp(self.norm2(x)))
 
         if return_attn:
-            return self.attn(self.norm1(x), attn_bias=attn_bias, return_attn=return_attn)
+            kwargs = {} if rope_positions is None else {"rope_positions": rope_positions}
+            return self.attn(self.norm1(x), attn_bias=attn_bias, return_attn=return_attn, **kwargs)
 
         if self.training and self.sample_drop_ratio > 0.1:
             # the overhead is compensated only for a drop path rate larger than 0.1
@@ -104,6 +106,7 @@ class Block(nn.Module):
                 residual_func=attn_residual_func,
                 sample_drop_ratio=self.sample_drop_ratio,
                 attn_bias=attn_bias,
+                rope_positions=rope_positions,
             )
             x = drop_add_residual_stochastic_depth(
                 x,
@@ -111,10 +114,10 @@ class Block(nn.Module):
                 sample_drop_ratio=self.sample_drop_ratio,
             )
         elif self.training and self.sample_drop_ratio > 0.0:
-            x = x + self.drop_path1(attn_residual_func(x, attn_bias=attn_bias))
+            x = x + self.drop_path1(attn_residual_func(x, attn_bias=attn_bias, rope_positions=rope_positions))
             x = x + self.drop_path1(ffn_residual_func(x))  # FIXME: drop_path2
         else:
-            x = x + attn_residual_func(x, attn_bias)
+            x = x + attn_residual_func(x, attn_bias, rope_positions=rope_positions)
             x = x + ffn_residual_func(x)
         return x
 
@@ -124,6 +127,7 @@ def drop_add_residual_stochastic_depth(
     residual_func: Callable[[Tensor], Tensor],
     sample_drop_ratio: float = 0.0,
     attn_bias=None,
+    rope_positions=None,
 ) -> Tensor:
     # 1) extract subset using permutation
     b, n, d = x.shape
@@ -132,10 +136,20 @@ def drop_add_residual_stochastic_depth(
     x_subset = x[brange]
 
     # 2) apply residual_func to get residual
+    rope_subset = rope_positions
+    if rope_positions is not None and rope_positions.dim() > 1 and rope_positions.shape[0] == b:
+        rope_subset = rope_positions[brange]
+
     if attn_bias is not None:
-        residual = residual_func(x_subset, attn_bias)
+        if rope_subset is not None:
+            residual = residual_func(x_subset, attn_bias, rope_subset)
+        else:
+            residual = residual_func(x_subset, attn_bias)
     else:
-        residual = residual_func(x_subset)
+        if rope_subset is not None:
+            residual = residual_func(x_subset, rope_positions=rope_subset)
+        else:
+            residual = residual_func(x_subset)
 
     x_flat = x.flatten(1)
     residual = residual.flatten(1)
@@ -262,9 +276,14 @@ class NestedTensorBlock(Block):
             x = x + ffn_residual_func(x)
             return attn_bias.split(x)
 
-    def forward(self, x_or_x_list, attn_bias=None, return_attn=False) -> Tensor:
+    def forward(self, x_or_x_list, attn_bias=None, return_attn=False, rope_positions=None) -> Tensor:
         if isinstance(x_or_x_list, Tensor):
-            return super().forward(x_or_x_list, attn_bias=attn_bias, return_attn=return_attn)
+            return super().forward(
+                x_or_x_list,
+                attn_bias=attn_bias,
+                return_attn=return_attn,
+                rope_positions=rope_positions,
+            )
         elif isinstance(x_or_x_list, list):
             if not XFORMERS_AVAILABLE:
                 raise AssertionError("xFormers is required for using nested tensors")

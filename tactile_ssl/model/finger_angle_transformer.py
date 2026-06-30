@@ -81,6 +81,7 @@ class FingerAngleTransformer(SignalTransformer):
         ffn_bias: bool = True,
         act_layer: Callable[..., nn.Module] = nn.GELU,
         norm_layer: Callable[..., nn.Module] = partial(nn.LayerNorm, eps=1e-6),
+        pos_embed_fn: Literal["learned", "rope"] = "learned",
         init_values: Optional[float] = None,
         num_register_tokens: int = 1,
         drop_path_rate: float = 0.0,
@@ -107,7 +108,7 @@ class FingerAngleTransformer(SignalTransformer):
             ffn_bias=ffn_bias,
             act_layer=act_layer,
             norm_layer=norm_layer,
-            pos_embed_fn="learned",
+            pos_embed_fn=pos_embed_fn,
             init_values=init_values,
             num_register_tokens=num_register_tokens,
             drop_path_rate=drop_path_rate,
@@ -118,12 +119,16 @@ class FingerAngleTransformer(SignalTransformer):
 
         self.pos_in_dim   = pos_in_dim
         self.pos_in_chans = pos_in_chans
+        self.use_rope = pos_embed_fn == "rope"
 
         D = embed_dim
 
-        # Per-finger positional embedding: (2, N//2, D) for left/right hand
-        self.angle_pos_embed = nn.Parameter(torch.zeros(2, pos_in_dim // 2, D))
-        self.hand_embed      = nn.Parameter(torch.zeros(2, D))
+        if self.use_rope:
+            self.angle_pos_embed = None
+            self.hand_embed = None
+        else:
+            self.angle_pos_embed = nn.Parameter(torch.zeros(2, pos_in_dim // 2, D))
+            self.hand_embed = nn.Parameter(torch.zeros(2, D))
 
         # PatchEmbed1d for angle stream
         self.angle_embed = _make_embed1d(pos_in_chans, sequence_length, time_chunk_size, D)
@@ -137,13 +142,16 @@ class FingerAngleTransformer(SignalTransformer):
         self.register_buffer("signal_mean", m)
         self.register_buffer("signal_std",  s)
 
-        nn.init.trunc_normal_(self.hand_embed,      std=0.02)
-        nn.init.trunc_normal_(self.angle_pos_embed, std=0.02)
+        if self.hand_embed is not None:
+            nn.init.trunc_normal_(self.hand_embed, std=0.02)
+        if self.angle_pos_embed is not None:
+            nn.init.trunc_normal_(self.angle_pos_embed, std=0.02)
 
         num_chunks = sequence_length // time_chunk_size
         log.info(
             f"FingerAngleTransformer: T={sequence_length}, chunk={time_chunk_size}, "
-            f"num_chunks={num_chunks}, N_angles={pos_in_dim}, embed_dim={D}"
+            f"num_chunks={num_chunks}, N_angles={pos_in_dim}, embed_dim={D}, "
+            f"pos_embed_fn={pos_embed_fn}"
         )
 
     # ── helpers ───────────────────────────────────────────────────────────────
@@ -154,6 +162,29 @@ class FingerAngleTransformer(SignalTransformer):
         lh = per_hand[0].float() + h[0]
         rh = per_hand[1].float() + h[1]
         return torch.cat([lh, rh], dim=0)
+
+    def _rope_positions(self, x: torch.Tensor) -> torch.Tensor:
+        b, t, n = x.shape[:3]
+        ids = torch.arange(n, device=x.device, dtype=torch.long)
+        return ids.view(1, 1, n).expand(b, t, n)
+
+    def _apply_position_masks(self, pos_ids: torch.Tensor, masks) -> torch.Tensor:
+        all_pos = []
+        t = pos_ids.shape[1]
+        for mask in masks:
+            mask = mask.to(device=pos_ids.device, dtype=torch.long)
+            mask_keep = einops.repeat(mask, "b n -> b t n", t=t)
+            all_pos.append(torch.gather(pos_ids, dim=-1, index=mask_keep))
+        return torch.cat(all_pos, dim=0)
+
+    def _flatten_rope_positions(self, pos_ids: Optional[torch.Tensor], skip_register: bool) -> Optional[torch.Tensor]:
+        if pos_ids is None:
+            return None
+        pos_ids = einops.rearrange(pos_ids, "b t n -> b (t n)")
+        if self.register_tokens is not None and not skip_register:
+            reg = pos_ids.new_full((pos_ids.shape[0], self.num_register_tokens), -1)
+            pos_ids = torch.cat([reg, pos_ids], dim=1)
+        return pos_ids
 
     # ── embedding ─────────────────────────────────────────────────────────────
 
@@ -172,16 +203,17 @@ class FingerAngleTransformer(SignalTransformer):
         joint_embed: Optional[torch.Tensor] = None,
         skip_register: bool = False,
     ):
+        rope_positions = self._rope_positions(x) if self.use_rope else None
+
         if joint_embed is not None:
             n = x.shape[-2]
             x = x + joint_embed.view(1, 1, n, -1)
 
         if masks is not None:
-            if mask_type == "tubelet":
+            if mask_type in ("tubelet", "block"):
                 x = self.apply_tubelet_masks(x, masks)
-            elif mask_type == "block":
-                from tactile_ssl.utils.masking import apply_masks
-                x = apply_masks(x, masks)
+                if rope_positions is not None:
+                    rope_positions = self._apply_position_masks(rope_positions, masks)
             else:
                 raise NotImplementedError(f"Unknown mask type: {mask_type}")
 
@@ -191,10 +223,11 @@ class FingerAngleTransformer(SignalTransformer):
             x = self.apply_masktokens(x, masktoken_masks)
 
         x = einops.rearrange(x, "b t n c -> b (t n) c")
+        rope_positions = self._flatten_rope_positions(rope_positions, skip_register)
         if self.register_tokens is not None and not skip_register:
             x = torch.cat([self.register_tokens.expand(x.shape[0], -1, -1), x], dim=1)
 
-        return x, attn_bias
+        return x, attn_bias, rope_positions
 
     # ── forward ───────────────────────────────────────────────────────────────
 
@@ -222,14 +255,14 @@ class FingerAngleTransformer(SignalTransformer):
         """
         pos = self.pre_embed(pos)
 
-        ang_pe = self._full_embed(self.angle_pos_embed)
+        ang_pe = None if self.use_rope else self._full_embed(self.angle_pos_embed)
 
-        pos, bias = self.prepare_tokens_with_mask(
+        pos, bias, rope_positions = self.prepare_tokens_with_mask(
             pos, masks, mask_type, masktoken_masks,
             joint_embed=ang_pe, skip_register=False,
         )
 
-        x_prenorm, x_postnorm = self.transform(pos, bias)
+        x_prenorm, x_postnorm = self.transform(pos, bias, rope_positions=rope_positions)
 
         r = self.num_register_tokens
         return {

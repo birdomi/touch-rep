@@ -91,7 +91,7 @@ class AngleTransformer(SignalTransformer):
         ffn_bias: bool = True,
         act_layer: Callable[..., nn.Module] = nn.GELU,
         norm_layer: Callable[..., nn.Module] = partial(nn.LayerNorm, eps=1e-6),
-        pos_embed_fn: Literal["sinusoidal", "learned"] = "learned",
+        pos_embed_fn: Literal["sinusoidal", "learned", "rope"] = "learned",
         init_values: Optional[float] = None,
         num_register_tokens: int = 1,
         drop_path_rate: float = 0.0,
@@ -142,6 +142,7 @@ class AngleTransformer(SignalTransformer):
         self.in_chans    = in_chans
         self.pos_in_dim  = pos_in_dim
         self.pos_in_chans = pos_in_chans
+        self.use_rope = pos_embed_fn == "rope"
         self.pre_fusion_depth = pre_fusion_depth if pre_fusion_depth is not None else depth // 4
         self.fine_tune_sensor_shallow_blocks = (
             self.pre_fusion_depth
@@ -159,11 +160,14 @@ class AngleTransformer(SignalTransformer):
         seq   = sequence_length
 
         # ── Positional embeddings ──────────────────────────────────────────────
-        # Each embed is (2, N//2, D): index 0 = pre-fusion stage, index 1 = fusion stage
-        # hand_embed (2, D): left[0] / right[1] hand bias, shared across streams
-        self.contact_pos_embed    = nn.Parameter(torch.zeros(2, in_dim     // 2, D))  # for contact stream
-        self.angle_pos_embed = nn.Parameter(torch.zeros(2, pos_in_dim // 2, D))  # for angle stream
-        self.hand_embed   = nn.Parameter(torch.zeros(2, D))
+        if self.use_rope:
+            self.contact_pos_embed = None
+            self.angle_pos_embed = None
+            self.hand_embed = None
+        else:
+            self.contact_pos_embed = nn.Parameter(torch.zeros(2, in_dim // 2, D))
+            self.angle_pos_embed = nn.Parameter(torch.zeros(2, pos_in_dim // 2, D))
+            self.hand_embed = nn.Parameter(torch.zeros(2, D))
 
         # ── PatchEmbed1d ───────────────────────────────────────────────────────
         self.sensor_embed    = _make_embed1d(in_chans,     seq, chunk, D)  # contact
@@ -200,7 +204,8 @@ class AngleTransformer(SignalTransformer):
 
 
         self.init_weights()
-        nn.init.trunc_normal_(self.hand_embed, std=0.02)
+        if self.hand_embed is not None:
+            nn.init.trunc_normal_(self.hand_embed, std=0.02)
 
         self.fine_tune_sensor = fine_tune_sensor
         if fine_tune_sensor:
@@ -211,6 +216,7 @@ class AngleTransformer(SignalTransformer):
             f"AngleTransformer: T={seq}, chunk={chunk}, num_chunks={num_chunks}, "
             f"N_contact={in_dim}, N_angles={pos_in_dim}, "
             f"pre_fusion_depth={self.pre_fusion_depth}, embed_dim={D}, "
+            f"pos_embed_fn={pos_embed_fn}, "
             f"use_null_token={self.use_null_token}, "
             f"fine_tune_sensor={self.fine_tune_sensor}, "
             f"fine_tune_sensor_shallow_blocks={self.fine_tune_sensor_shallow_blocks}"
@@ -259,6 +265,29 @@ class AngleTransformer(SignalTransformer):
         lh = per_hand[0].float() + h[0]           # (N//2, D)
         rh = per_hand[1].float() + h[1]           # (N//2, D)
         return torch.cat([lh, rh], dim=0)         # (N, D)
+
+    def _rope_positions(self, x: torch.Tensor, offset: int = 0) -> torch.Tensor:
+        b, t, n = x.shape[:3]
+        ids = torch.arange(offset, offset + n, device=x.device, dtype=torch.long)
+        return ids.view(1, 1, n).expand(b, t, n)
+
+    def _apply_position_masks(self, pos_ids: torch.Tensor, masks) -> torch.Tensor:
+        all_pos = []
+        t = pos_ids.shape[1]
+        for mask in masks:
+            mask = mask.to(device=pos_ids.device, dtype=torch.long)
+            mask_keep = einops.repeat(mask, "b n -> b t n", t=t)
+            all_pos.append(torch.gather(pos_ids, dim=-1, index=mask_keep))
+        return torch.cat(all_pos, dim=0)
+
+    def _flatten_rope_positions(self, pos_ids: Optional[torch.Tensor], skip_register: bool) -> Optional[torch.Tensor]:
+        if pos_ids is None:
+            return None
+        pos_ids = einops.rearrange(pos_ids, "b t n -> b (t n)")
+        if self.register_tokens is not None and not skip_register:
+            reg = pos_ids.new_full((pos_ids.shape[0], self.num_register_tokens), -1)
+            pos_ids = torch.cat([reg, pos_ids], dim=1)
+        return pos_ids
 
     # ── null token expansion ──────────────────────────────────────────────────
 
@@ -334,32 +363,20 @@ class AngleTransformer(SignalTransformer):
         masktoken_masks: Optional[List[torch.Tensor]],
         joint_embed: Optional[torch.Tensor] = None,
         skip_register: bool = False,
+        rope_offset: int = 0,
     ):
-        """Flatten + positional embed + masking + register token.
+        """Flatten + optional learned PE/RoPE ids + masking + register token."""
+        rope_positions = self._rope_positions(x, rope_offset) if self.use_rope else None
 
-        Args:
-            x            : (B, T, N, D)
-            masks        : token masking indices
-            mask_type    : "tubelet" or "block"
-            masktoken_masks: mask token positions
-            joint_embed  : (N, D) positional embedding for this stream.
-                           Uses self._full_embed(self.pos_embed, 0) if None.
-            skip_register: if True, do not prepend register token
-
-        Returns:
-            tokens   : (B_eff, seq, D)
-            attn_bias: causal bias or None
-        """
         if joint_embed is not None:
             n = x.shape[-2]
             x = x + joint_embed.view(1, 1, n, -1)
 
         if masks is not None:
-            if mask_type == "tubelet":
+            if mask_type in ("tubelet", "block"):
                 x = self.apply_tubelet_masks(x, masks)
-            elif mask_type == "block":
-                from tactile_ssl.utils.masking import apply_masks
-                x = apply_masks(x, masks)
+                if rope_positions is not None:
+                    rope_positions = self._apply_position_masks(rope_positions, masks)
             else:
                 raise NotImplementedError(f"Unknown mask type: {mask_type}")
 
@@ -369,17 +386,19 @@ class AngleTransformer(SignalTransformer):
             x = self.apply_masktokens(x, masktoken_masks)
 
         x = einops.rearrange(x, "b t n c -> b (t n) c")
+        rope_positions = self._flatten_rope_positions(rope_positions, skip_register)
         if self.register_tokens is not None and not skip_register:
             x = torch.cat([self.register_tokens.expand(x.shape[0], -1, -1), x], dim=1)
 
-        return x, attn_bias
+        return x, attn_bias, rope_positions
 
     # ── pre-fusion sensor blocks ───────────────────────────────────────────────
 
-    def sensor_transform(self, x: torch.Tensor, _bias) -> torch.Tensor:
+    def sensor_transform(self, x: torch.Tensor, _bias, rope_positions=None) -> torch.Tensor:
         """Pre-fusion self-attention over contact tokens."""
         for blk in self.sensor_block:
-            x = blk(x, _bias)
+            kwargs = {} if rope_positions is None else {"rope_positions": rope_positions}
+            x = blk(x, _bias, **kwargs)
         return x
 
     # ── fusion ────────────────────────────────────────────────────────────────
@@ -391,6 +410,8 @@ class AngleTransformer(SignalTransformer):
         sen_mask,
         pos_mask,
         bias,
+        sen_rope_positions=None,
+        pos_rope_positions=None,
     ):
         """Concat sensor and angle streams → fusion blocks → norm.
 
@@ -404,21 +425,24 @@ class AngleTransformer(SignalTransformer):
         Returns:
             x_prenorm, x_postnorm : both (B_eff, reg+N_contact+N_angle, D)
         """
-        # Fusion-stage positional embeddings
-        sen_pe = self._full_embed(self.contact_pos_embed)        # (N_joints,  D)
-        ang_pe = self._full_embed(self.angle_pos_embed)  # (N_fingers, D)
-
-        if sen_mask is not None:
-            ns = sen_mask.shape[-1]
-            se = sen_pe[sen_mask.view(-1, ns)]
-            sen = sen + se
-
-            np_ = pos_mask.shape[-1]
-            ae = ang_pe[pos_mask.view(-1, np_)]
-            pos[:, 1:] = pos[:, 1:] + ae
+        rope_positions = None
+        if self.use_rope:
+            rope_positions = torch.cat([pos_rope_positions, sen_rope_positions], dim=1)
         else:
-            sen = sen + sen_pe
-            pos[:, 1:] = pos[:, 1:] + ang_pe
+            sen_pe = self._full_embed(self.contact_pos_embed)
+            ang_pe = self._full_embed(self.angle_pos_embed)
+
+            if sen_mask is not None:
+                ns = sen_mask.shape[-1]
+                se = sen_pe[sen_mask.view(-1, ns)]
+                sen = sen + se
+
+                np_ = pos_mask.shape[-1]
+                ae = ang_pe[pos_mask.view(-1, np_)]
+                pos[:, 1:] = pos[:, 1:] + ae
+            else:
+                sen = sen + sen_pe
+                pos[:, 1:] = pos[:, 1:] + ang_pe
 
         fused = torch.cat([pos, sen], dim=1)     # (B_eff, reg+N_a+N_s, D)
 
@@ -429,7 +453,8 @@ class AngleTransformer(SignalTransformer):
         # fused = sen
 
         for blk in self.blocks:
-            fused = blk(fused, None)
+            kwargs = {} if rope_positions is None else {"rope_positions": rope_positions}
+            fused = blk(fused, None, **kwargs)
 
         x_norm = self.norm(fused)
         return x_norm, x_norm
@@ -475,26 +500,28 @@ class AngleTransformer(SignalTransformer):
         pos = self.pre_pos_embed(pos)
 
         # --- positional embeddings (pre-fusion stage) ------------------------
-        sen_pe = self._full_embed(self.contact_pos_embed)  # (N_joints,  D)
-        ang_pe = self._full_embed(self.angle_pos_embed)  # (N_fingers, D)
+        sen_pe = None if self.use_rope else self._full_embed(self.contact_pos_embed)
+        ang_pe = None if self.use_rope else self._full_embed(self.angle_pos_embed)
 
         _pos_masks = pos_masks if pos_masks is not None else masks
 
-        x, bias = self.prepare_tokens_with_mask(
+        x, bias, sen_rope_positions = self.prepare_tokens_with_mask(
             x, masks, mask_type, masktoken_masks,
-            joint_embed=sen_pe, skip_register=True,
+            joint_embed=sen_pe, skip_register=True, rope_offset=0,
         )
-        pos, _ = self.prepare_tokens_with_mask(
+        pos, _, pos_rope_positions = self.prepare_tokens_with_mask(
             pos, _pos_masks, mask_type, None,
-            joint_embed=ang_pe, skip_register=False,
+            joint_embed=ang_pe, skip_register=False, rope_offset=self.in_dim,
         )
 
         # --- pre-fusion sensor attention -------------------------------------
-        sen = self.sensor_transform(x, bias)
+        sen = self.sensor_transform(x, bias, rope_positions=sen_rope_positions)
 
         # --- fusion ----------------------------------------------------------
         x_prenorm, x_postnorm = self.transform_concat(
-            sen, pos, masks, _pos_masks, bias
+            sen, pos, masks, _pos_masks, bias,
+            sen_rope_positions=sen_rope_positions,
+            pos_rope_positions=pos_rope_positions,
         )
 
         r = self.num_register_tokens

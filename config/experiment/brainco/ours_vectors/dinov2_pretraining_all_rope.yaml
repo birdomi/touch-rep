@@ -1,0 +1,15 @@
+# @package _global_
+
+defaults:
+  - /experiment/brainco/ours_vectors/dinov2_pretraining_all
+  - _self_
+
+experiment_name: dinov2_all_${model_size}_rope
+
+wandb:
+  group: dino_all_${model_size}_rope
+  tags: ["all", "oakinkv2", "arctic", "taco", "hot3d", "${model_size}", "rope"]
+
+algorithm:
+  encoder:
+    pos_embed_fn: rope
