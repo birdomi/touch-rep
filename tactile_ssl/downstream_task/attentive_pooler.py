@@ -137,9 +137,7 @@ class AttentiveClassifier(nn.Module):
         self.linear = nn.Linear(embed_dim, num_classes, bias=False)
 
     def forward(self, x):
-        print('embed', x.shape)
         x = self.pooler(x).squeeze(1)
         x = self.linear(x)
-        print('logit', x.shape)
 
         return x

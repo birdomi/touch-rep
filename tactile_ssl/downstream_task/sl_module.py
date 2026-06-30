@@ -101,32 +101,63 @@ class SLModule(Module, nn.Module):
 
     def load_encoder(self, checkpoint_encoder: str):
         log.info(f"Loading encoder from {checkpoint_encoder}")
-        checkpoint = torch.load(checkpoint_encoder, weights_only=False)
-        if "jepa" in self.encoder_type:
-            encoder_key = "target_encoder"
-        elif "dino" in self.encoder_type:
-            encoder_key = "teacher_encoder.backbone"
+        checkpoint = torch.load(checkpoint_encoder, map_location="cpu", weights_only=False)
+        if isinstance(checkpoint, dict) and "model" in checkpoint and isinstance(checkpoint["model"], dict):
+            checkpoint_state = checkpoint["model"]
+        elif isinstance(checkpoint, dict) and "state_dict" in checkpoint and isinstance(checkpoint["state_dict"], dict):
+            checkpoint_state = checkpoint["state_dict"]
         else:
-            encoder_key = "encoder"
-        # get the keys in the checkpoint that contain the encoder
-        target_keys = [key for key in checkpoint["model"].keys() if encoder_key in key]
-        # remove the prefix from the keys
-        new_keys = [key.replace(f"{encoder_key}.", "") for key in target_keys]
-        # create a state_dict with keys from the checkpoint
-        new_state_dict = {
-            new_key: checkpoint["model"][target_key] for new_key, target_key in zip(new_keys, target_keys)
-        }
-        # filter out shape-mismatched keys (strict=False skips missing keys but still errors on shape mismatch)
+            checkpoint_state = checkpoint
+
+        if "jepa" in self.encoder_type:
+            encoder_keys = ["target_encoder", "context_encoder", "encoder", "model_encoder"]
+        elif "dino" in self.encoder_type:
+            encoder_keys = [
+                "teacher_encoder.backbone",
+                "student_encoder.backbone",
+                "teacher_encoder",
+                "student_encoder",
+                "encoder",
+                "model_encoder",
+            ]
+        else:
+            encoder_keys = ["encoder", "model_encoder"]
+
         model_state = self.model_encoder.state_dict()
-        filtered_state_dict = {
-            k: v for k, v in new_state_dict.items()
-            if k in model_state and v.shape == model_state[k].shape
-        }
-        skipped = [k for k in new_state_dict if k not in filtered_state_dict]
+
+        filtered_state_dict = {}
+        matched_encoder_key = None
+        skipped = []
+        for encoder_key in encoder_keys:
+            prefix = f"{encoder_key}."
+            target_keys = [key for key in checkpoint_state.keys() if prefix in key]
+            new_state_dict = {
+                key.split(prefix, 1)[1]: checkpoint_state[key]
+                for key in target_keys
+                if hasattr(checkpoint_state[key], "shape")
+            }
+            filtered_state_dict = {
+                k: v for k, v in new_state_dict.items()
+                if k in model_state and v.shape == model_state[k].shape
+            }
+            skipped = [k for k in new_state_dict if k not in filtered_state_dict]
+            if filtered_state_dict:
+                matched_encoder_key = encoder_key
+                break
+
+        if not filtered_state_dict:
+            tensor_keys = [k for k, v in checkpoint_state.items() if hasattr(v, "shape")]
+            raise RuntimeError(
+                f"No compatible encoder parameters were found in checkpoint: {checkpoint_encoder}. "
+                f"Tried prefixes {encoder_keys}. First tensor keys: {tensor_keys[:12]}"
+            )
         if skipped:
-            log.info(f"Skipped {len(skipped)} shape-mismatched keys: {skipped}")
+            log.info(f"Skipped {len(skipped)} missing/shape-mismatched keys: {skipped[:20]}")
         self.model_encoder.load_state_dict(filtered_state_dict, strict=False)
-        print(f"Loaded encoder from {checkpoint_encoder}")
+        print(
+            f"Loaded encoder from {checkpoint_encoder} "
+            f"(prefix={matched_encoder_key}, tensors={len(filtered_state_dict)})"
+        )
 
     def forward(self, x, *args, **kwargs):  # noqa
         raise NotImplementedError

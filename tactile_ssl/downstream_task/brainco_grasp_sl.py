@@ -425,7 +425,6 @@ class BraincoGraspDetectionSLModule(SLModule):
 
         # Encode: (B, num_windows, embed_dim)
         embeddings = self.encode(sensor, sensor_poses, mask)
-        print(embeddings.shape)
 
         # Apply classifier sequence modeling: expects (B, seq_len, embed_dim)
         if self.train_encoder:

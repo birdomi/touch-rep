@@ -40,7 +40,7 @@ dataset:
           eraser_fail: 0  
           driver_succ: 1
           driver_fail: 0
-  data_path: ${paths.data_root}/brainco/downstream/grasp_prediction
+  data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_0611
 
 # Optional: set this to use a fixed validation dataset instead of k-fold
 # splitting from `dataset`. Keep null for the existing k-fold behavior.
