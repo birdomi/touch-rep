@@ -2,7 +2,7 @@
 
 defaults:
   - override /data: brainco_pretraining
-  - override /algorithm: xela_dinov2_pos
+  - override /algorithm: brainco_dinov2
   - _self_
 
 model_size: tiny

@@ -14,7 +14,6 @@ import torch.utils.data as data
 from tactile_ssl.utils.logging import get_pylogger
 # Ensure resolvers are registered by importing train module
 from tactile_ssl.build_encoder import build_encoder
-from tactile_ssl.data.xela_tactile import XelaSSLDataset
 from tactile_ssl.downstream_task.attentive_pooler import AttentiveClassifier
 
 import yaml

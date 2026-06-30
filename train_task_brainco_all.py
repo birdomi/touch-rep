@@ -21,15 +21,11 @@ from lightning.fabric import seed_everything
 
 from tactile_ssl.utils import get_local_rank
 from tactile_ssl.utils.logging import get_pylogger, print_config_tree
-from tactile_ssl.data.d360.utils import get_weights, get_experiment_name, get_modality_tag, get_modality_used_tag
 from tactile_ssl.trainer import Trainer
 
 logger = get_pylogger(__name__)
 OmegaConf.register_new_resolver("int_multiply", lambda a, b: int(a * b))
 OmegaConf.register_new_resolver("int_divide", lambda a, b: a // b)
-OmegaConf.register_new_resolver("d360_expt_name", get_experiment_name)
-OmegaConf.register_new_resolver("d360_modal_tag", get_modality_tag)
-OmegaConf.register_new_resolver("d360_modal_used_tag", get_modality_used_tag)
 OmegaConf.register_new_resolver("capitalize", lambda s: s.title())
 
 

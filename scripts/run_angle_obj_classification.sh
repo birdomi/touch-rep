@@ -8,7 +8,6 @@
 #   bash scripts/run_angle_obj_classification.sh pretrained         # pretrained × {hot3d,taco,arctic,brainco}
 #   bash scripts/run_angle_obj_classification.sh -m epoch-0150      # 특정 모델 하나
 #   bash scripts/run_angle_obj_classification.sh pretrained -m "epoch-0150,epoch-0040"
-#   bash scripts/run_angle_obj_classification.sh -m "dinov2_angle/epoch-0150.ckpt,dinov2_multi_sensor_pretrained/epoch-0150-all-cls.ckpt"
 #
 # 기본 pretrained 모델 (DEFAULT_PRETRAINED_MODELS):
 #   epoch-0200-hot3d, epoch-0200-taco, epoch-0300-arctic, epoch-5000-brainco

@@ -34,14 +34,12 @@ mkdir -p "${LOG_DIR}"
 #          → yaml 파일의 checkpoint_encoder 그대로 사용
 # 형식 2: "task_subdir/experiment_yaml_stem:epoch-0300-arctic"
 #          → 파일명 스템만 쓰면 yaml의 체크포인트 디렉토리에서 자동 완성
-#            (예: checkpoints/dinov2_multi_sensor_pretrained/epoch-0300-arctic.ckpt)
 # 형식 3: "task_subdir/experiment_yaml_stem:checkpoints/other_dir/epoch-0300.ckpt"
 #          → 경로 구분자(/) 또는 .ckpt 확장자가 있으면 그대로 사용
 # 주석 처리하면 해당 실험 스킵
 
 DETECTION_EXPERIMENTS=(
     # "grasp_detection/dinov2_multi"
-    # "grasp_detection/dinov2_multi:checkpoints/dinov2_multi_sensor_pretrained/epoch-0300-taco.ckpt"
     # "grasp_detection/dinov2_multi_mask"
     # "grasp_detection/dinov2_multi_rm"
     # "grasp_detection/dinov2_multi_mask_r2h"

@@ -15,7 +15,6 @@ import torch
 import torch.nn as nn
 
 from tactile_ssl.utils.logging import get_pylogger
-from tactile_ssl.data.xela.utils import XELA_FLATTEN_ORDER
 from tactile_ssl.model import SignalTransformer
 
 from .layers import PatchEmbed1d, PatchEmbed
@@ -227,7 +226,7 @@ class BraincoTransformer(SignalTransformer):
 
     def create_causal_mask(self, x):
         """
-        Create lower triangular block mask for Xela signals
+        Create lower triangular block mask for temporal BrainCo signals.
         """
         _, chunked_t, n, _ = x.shape
         bias_size = chunked_t * n + self.num_register_tokens

@@ -1,8 +1,8 @@
 defaults:
   - paths: default
   - wandb: wandb_config
-  - data: xela
-  - algorithm: byol_alexnet
+  - data: brainco_angle_pretraining
+  - algorithm: angle_dinov2
   - override hydra/job_logging: colorlog
   - override hydra/hydra_logging: colorlog
   - _self_

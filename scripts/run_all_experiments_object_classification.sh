@@ -40,7 +40,6 @@ EXPERIMENTS=(
     # "object_classification/dinov2_multi"
     "object_classification/dinov2_multi_mask"
     "object_classification/dinov2_multi_mask_rm"
-    # "object_classification/dinov2_multi:checkpoints/dinov2_multi_sensor_pretrained/epoch-0300-taco.ckpt"
 )
 
 ALL_EXPERIMENTS=("${EXPERIMENTS[@]}")

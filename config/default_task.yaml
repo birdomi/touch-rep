@@ -1,8 +1,8 @@
 defaults:
   - paths: default
   - wandb: wandb_config
-  - data: d360
-  - task: d360_t1_force_estimation
+  - data: brainco_grasp_prediction
+  - task: brainco_grasp_prediction
   - override hydra/job_logging: colorlog
   - override hydra/hydra_logging: colorlog
   - _self_

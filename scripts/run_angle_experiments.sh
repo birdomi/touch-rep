@@ -9,7 +9,6 @@
 #   bash scripts/run_angle_experiments.sh -m epoch-0150                # 특정 모델 하나
 #   bash scripts/run_angle_experiments.sh pretrained -m epoch-0150     # pretrained + 특정 모델
 #   bash scripts/run_angle_experiments.sh -m "epoch-0150,epoch-0040"   # 여러 모델 (콤마 구분)
-#   bash scripts/run_angle_experiments.sh -m "dinov2_angle/epoch-0150.ckpt,dinov2_multi_sensor_pretrained/epoch-0150-all-cls.ckpt"
 #   bash scripts/run_angle_experiments.sh pretrained -m yaml           # yaml 기본 checkpoint만 사용
 #
 # 결과:

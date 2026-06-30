@@ -17,7 +17,6 @@ else:
     fmha = None
 
 from tactile_ssl.algorithm import DINOv2Module
-from tactile_ssl.data.xela.utils import xela_sensor_layout
 from tactile_ssl.utils.logging import get_pylogger
 from tactile_ssl.utils.masking import sample_block_mask, sample_block_size_1d, sample_random_mask
 
@@ -75,8 +74,7 @@ class BraincoDINOv2Module(DINOv2Module):
                     X_orig = X_orig[0].cpu().numpy()[..., 0, : min(3, l)]
                     signal_mean = self.teacher_encoder_dict["backbone"].signal_mean.detach().cpu().numpy()
                     signal_std = self.teacher_encoder_dict["backbone"].signal_std.detach().cpu().numpy()
-                    # X_pred = xela_sensor_layout(X_pred, signal_mean, signal_std)
-                    # X_orig = xela_sensor_layout(X_orig)
+                    # Add a BrainCo-specific layout here if image-style logging is needed.
 
                 trainer_instance.wandb.log(
                     {

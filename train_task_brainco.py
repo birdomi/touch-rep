@@ -20,16 +20,12 @@ from lightning.fabric import seed_everything
 from tactile_ssl.utils import get_local_rank
 
 from tactile_ssl.utils.logging import get_pylogger, print_config_tree
-from tactile_ssl.data.d360.utils import get_weights, get_experiment_name, get_modality_tag, get_modality_used_tag
 from tactile_ssl.trainer import Trainer
 from tactile_ssl.utils.combined_dataset import CombinedDataset
 
 logger = get_pylogger(__name__)
 OmegaConf.register_new_resolver("int_multiply", lambda a, b: int(a * b))
 OmegaConf.register_new_resolver("int_divide", lambda a, b: a // b)
-OmegaConf.register_new_resolver("d360_expt_name", get_experiment_name)
-OmegaConf.register_new_resolver("d360_modal_tag", get_modality_tag)
-OmegaConf.register_new_resolver("d360_modal_used_tag", get_modality_used_tag)
 OmegaConf.register_new_resolver("capitalize", lambda s: s.title())
 
 
@@ -221,16 +217,8 @@ def get_dataloader_brainco_grasp(cfg: DictConfig):
 def get_dataloaders(cfg: DictConfig):
     data_cfg = cfg.data
 
-    if "d360_contact" in data_cfg.sensor:
-        train_dataloader, val_dataloader = get_dataloaders_d360_contact_based(cfg)
-    elif "d360_classification" in data_cfg.sensor:
-        train_dataloader, val_dataloader = get_dataloaders_d360_classification_based(cfg)
-    elif "d360" in data_cfg.sensor:
-        train_dataloader, val_dataloader = get_dataloaders_d360_based(cfg)
-    elif data_cfg.sensor == "xela":
-        train_dataloader, val_dataloader = get_dataloader_xela(cfg)
-    elif data_cfg.sensor in ("brainco_grasp", "brainco_grasp_prediction", "brainco_grasp_multimodal",
-                              "brainco_object_classification"):
+    if data_cfg.sensor in ("brainco_grasp", "brainco_grasp_prediction", "brainco_grasp_multimodal",
+                           "brainco_object_classification"):
         train_dataloader, val_dataloader = get_dataloader_brainco_grasp(cfg)
         return train_dataloader, val_dataloader, None
     else:

@@ -1,13 +1,4 @@
 from .module import Module  # isort: skip # noqa F401
-from .byol import BYOLModule  # noqa F401
 from .dinov2 import DINOv2Module  # noqa F401
-from .mae import MAEModule  # noqa F401
-from .d360_dino import D360DINOModule  # noqa F401
-from .xela_dinov2 import XelaDINOv2Module  # noqa F401
-from .xela_mae import XelaMAEModule  # noqa F402
-from .xela_pos_dinov2 import XelaDINOv2PosModule  # noqa F403
-from .cross_sensor_dinov2 import CrossSensorDINOv2Module  # noqa F404
-from .brainco_dinov2 import BraincoDINOv2Module  # noqa F405
-from .multi_sensor_dinov2 import MultiSensorDINOv2Module  # noqa F406
-from .angle_dinov2 import AngleDinov2Module  # noqa F407
-from .finger_angle_dinov2 import FingerAngleDinov2Module  # noqa F408
+from .brainco_dinov2 import BraincoDINOv2Module  # noqa F401
+from .angle_dinov2 import AngleDinov2Module  # noqa F401
