@@ -81,8 +81,9 @@ class AngleDinov2Module(BraincoDINOv2Module):
         # Pos stream (finger_angles) has different N than sensor stream.
         # Create a dummy tensor with the correct pos N so BraincoDINOv2Module
         # samples indices into the right range.
-        pos_in_dim = self.student_encoder_dict["backbone"].pos_in_dim
-        pos_dummy = x.new_zeros(x.shape[0], x.shape[1], pos_in_dim, 1)
+        backbone = self.student_encoder_dict["backbone"]
+        pos_token_dim = getattr(backbone, "pos_token_dim", backbone.pos_in_dim)
+        pos_dummy = x.new_zeros(x.shape[0], x.shape[1], pos_token_dim, 1)
         pos_global_masks, pos_local_masks, _  = super().sample_masks(pos_dummy)
 
         n_p = pos_global_masks.shape[-1]

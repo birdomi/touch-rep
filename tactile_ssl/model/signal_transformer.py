@@ -43,7 +43,7 @@ class SignalTransformer(nn.Module):
         head: Optional[nn.Module] = None,
         act_layer: Callable[..., nn.Module] = nn.GELU,
         norm_layer: Callable[..., nn.Module] = partial(nn.LayerNorm, eps=1e-6),
-        pos_embed_fn: Literal["sinusoidal", "learned", "rope"] = "learned",
+        pos_embed_fn: Literal["sinusoidal", "learned", "rope", "multimodal_rope", "mrope"] = "learned",
         init_values: Optional[float] = None,
         num_register_tokens: int = 0,
         drop_path_rate: float = 0.0,
@@ -135,7 +135,7 @@ class SignalTransformer(nn.Module):
                     self.embed_dim,
                 )
             )
-        elif pos_embed_fn == "rope":
+        elif pos_embed_fn in {"rope", "multimodal_rope", "mrope"}:
             self.pos_embed = None
         else:
             raise NotImplementedError("Unknown position embedding function")

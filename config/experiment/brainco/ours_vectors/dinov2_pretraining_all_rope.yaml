@@ -12,4 +12,6 @@ wandb:
 
 algorithm:
   encoder:
+    # Multimodal RoPE over hand/finger axes; angle joint values remain channels.
     pos_embed_fn: rope
+    debug_rope: true

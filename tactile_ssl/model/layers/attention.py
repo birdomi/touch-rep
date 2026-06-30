@@ -47,12 +47,32 @@ def _apply_rope(x: Tensor, positions: Tensor, seq_dim: int, base: float = 10000.
     if positions is None or rot_dim == 0:
         return x
 
-    valid = positions.to(device=x.device) >= 0
-    pos = positions.to(device=x.device).clamp_min(0).float()
-    inv_freq = 1.0 / (
-        base ** (torch.arange(0, rot_dim, 2, device=x.device, dtype=torch.float32) / rot_dim)
-    )
-    freqs = torch.einsum("...n,d->...nd", pos, inv_freq)
+    num_pairs = rot_dim // 2
+    positions = positions.to(device=x.device)
+    if positions.dim() >= 3:
+        pos = positions.float()
+        num_axes = pos.shape[-1]
+        pair_idx = torch.arange(num_pairs, device=x.device)
+        axis_idx = pair_idx.remainder(num_axes)
+        axis_rank = torch.div(pair_idx, num_axes, rounding_mode="floor").float()
+        axis_counts = torch.div(
+            num_pairs + num_axes - 1 - torch.arange(num_axes, device=x.device),
+            num_axes,
+            rounding_mode="floor",
+        ).clamp_min(1).float()
+        inv_freq = 1.0 / (base ** (axis_rank / axis_counts[axis_idx]))
+
+        valid = pos[..., axis_idx] >= 0
+        freqs = pos.clamp_min(0)[..., axis_idx] * inv_freq
+    else:
+        valid = positions >= 0
+        pos = positions.clamp_min(0).float()
+        inv_freq = 1.0 / (
+            base ** (torch.arange(0, rot_dim, 2, device=x.device, dtype=torch.float32) / rot_dim)
+        )
+        freqs = torch.einsum("...n,d->...nd", pos, inv_freq)
+        valid = valid.unsqueeze(-1).expand_as(freqs)
+
     cos = freqs.cos().to(dtype=x.dtype)
     sin = freqs.sin().to(dtype=x.dtype)
 
@@ -63,7 +83,7 @@ def _apply_rope(x: Tensor, positions: Tensor, seq_dim: int, base: float = 10000.
             valid = valid.unsqueeze(0)
         cos = cos.unsqueeze(1)
         sin = sin.unsqueeze(1)
-        valid = valid.unsqueeze(1).unsqueeze(-1)
+        valid = valid.unsqueeze(1)
     elif seq_dim == 1:
         if cos.dim() == 2:
             cos = cos.unsqueeze(0)
@@ -71,7 +91,7 @@ def _apply_rope(x: Tensor, positions: Tensor, seq_dim: int, base: float = 10000.
             valid = valid.unsqueeze(0)
         cos = cos.unsqueeze(2)
         sin = sin.unsqueeze(2)
-        valid = valid.unsqueeze(2).unsqueeze(-1)
+        valid = valid.unsqueeze(2)
     else:
         raise ValueError(f"Unsupported RoPE sequence dim: {seq_dim}")
 
