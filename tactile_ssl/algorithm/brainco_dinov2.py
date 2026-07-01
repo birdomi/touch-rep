@@ -1,12 +1,10 @@
 import os
-import random
 from typing import Any, Dict, List, Optional
 
 import einops
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torch.utils.data as data
 
 if os.environ.get("XFORMERS_DISABLED") is None:
     try:
@@ -18,7 +16,7 @@ else:
 
 from tactile_ssl.algorithm import DINOv2Module
 from tactile_ssl.utils.logging import get_pylogger
-from tactile_ssl.utils.masking import sample_block_mask, sample_block_size_1d, sample_random_mask
+from tactile_ssl.utils.masking import sample_block_size_1d
 
 log = get_pylogger(__name__)
 
@@ -36,6 +34,8 @@ class BraincoDINOv2Module(DINOv2Module):
         # This is valid only when the baseline is subtracted in the xela dataset
         self.ibot_mask_ratio = ibot_mask_ratio
         self.use_random_mask = use_random_mask
+        self._mask_generators: Dict[str, torch.Generator] = {}
+        self._mask_generator_steps: Dict[str, int] = {}
 
     @staticmethod
     def _empty_pos_like(x: torch.Tensor) -> torch.Tensor:
@@ -83,67 +83,110 @@ class BraincoDINOv2Module(DINOv2Module):
                     }
                 )
 
-    def _sample_single_mask(self, num_sensors, num_keep, acceptable_regions=None):
-        if self.use_random_mask:
-            return sample_random_mask(
-                num_tokens=num_sensors,
-                num_keep=num_keep,
-                min_mask_size=self.min_keep,
-                acceptable_regions=acceptable_regions,
-                generator=self.generator,
-            )
-        else:
-            return sample_block_mask(
-                [num_sensors],
-                [num_keep],
-                min_mask_size=self.min_keep,
-                acceptable_regions=acceptable_regions,
-                generator=self.generator,
-            )
+    def _mask_generator_for_device(self, device: torch.device) -> torch.Generator:
+        key = str(device)
+        generator = self._mask_generators.get(key)
+        if generator is None:
+            generator = torch.Generator(device=device)
+            self._mask_generators[key] = generator
+            self._mask_generator_steps[key] = -1
 
-    def sample_masks(self, x):
+        if self._mask_generator_steps.get(key) != self.step:
+            generator.manual_seed(max(int(self.step), 0))
+            self._mask_generator_steps[key] = int(self.step)
+        return generator
+
+    def _sample_keep_size(self, num_sensors: int, scale) -> int:
+        num_keep = sample_block_size_1d(num_sensors, scale, self.generator)[0]
+        num_keep = max(num_keep, self.min_keep)
+        return min(num_keep, num_sensors)
+
+    @staticmethod
+    def _sample_random_masks_gpu(
+        num_masks: int,
+        batch_size: int,
+        num_sensors: int,
+        num_keep: int,
+        device: torch.device,
+        generator: torch.Generator,
+    ) -> torch.Tensor:
+        scores = torch.rand(
+            num_masks,
+            batch_size,
+            num_sensors,
+            device=device,
+            generator=generator,
+        )
+        masks = scores.topk(num_keep, dim=-1).indices
+        return masks.sort(dim=-1).values
+
+    def _sample_ibot_masks_gpu(
+        self,
+        batch_size: int,
+        num_sensors: int,
+        global_num_keep: int,
+        device: torch.device,
+        generator: torch.Generator,
+    ) -> torch.Tensor:
+        min_ratio, max_ratio = float(self.ibot_mask_ratio[0]), float(self.ibot_mask_ratio[1])
+        ratios = torch.empty(
+            self.num_global_masks,
+            batch_size,
+            device=device,
+        ).uniform_(min_ratio, max_ratio, generator=generator)
+        num_masked = (ratios * num_sensors).long().clamp(max=global_num_keep)
+
+        ranks = torch.rand(
+            self.num_global_masks,
+            batch_size,
+            global_num_keep,
+            device=device,
+            generator=generator,
+        ).argsort(dim=-1).argsort(dim=-1)
+        return ranks < num_masked.unsqueeze(-1)
+
+    def _sample_masks_gpu(self, x: torch.Tensor):
         batch_size, _, num_sensors, _ = x.shape
+        device = x.device
+        generator = self._mask_generator_for_device(device)
 
-        local_num_keep = sample_block_size_1d(num_sensors, self.local_mask_scale, self.generator)[0]
-        global_num_keep = sample_block_size_1d(num_sensors, self.global_mask_scale, self.generator)[0]
+        local_num_keep = self._sample_keep_size(num_sensors, self.local_mask_scale)
+        global_num_keep = self._sample_keep_size(num_sensors, self.global_mask_scale)
 
-        collated_local_masks, collated_global_masks, collated_ibot_masks = [], [], []
-        min_keep_local_patches, min_keep_global_patches = (num_sensors, num_sensors)
-        for _ in range(batch_size):
-            masks_encoder, masks_complement = [], []
-            ibot_masks = []
-            for _ in range(self.num_global_masks):
-                mask, mask_complement = self._sample_single_mask(num_sensors, global_num_keep)
-                ibot_mask = torch.zeros(len(mask), dtype=torch.bool)
-                num_masked_tokens = int(random.uniform(*self.ibot_mask_ratio) * num_sensors)
-                ibot_mask_idx = torch.randperm(len(mask))[:num_masked_tokens]
-                ibot_mask[ibot_mask_idx] = 1
-                ibot_masks.append(ibot_mask)
-                masks_encoder.append(mask)
-                masks_complement.append(mask_complement)
-                min_keep_global_patches = min(min_keep_global_patches, len(mask))
-            collated_global_masks.append(masks_encoder)
-            collated_ibot_masks.append(ibot_masks)
-
-            acceptable_regions = masks_complement
-            if self.allow_mask_overlap:
-                acceptable_regions = None
-
-            masks_local = []
-            for _ in range(self.num_local_masks):
-                mask, _ = self._sample_single_mask(num_sensors, local_num_keep, acceptable_regions)
-                masks_local.append(mask)
-                min_keep_local_patches = min(min_keep_local_patches, len(mask))
-            collated_local_masks.append(masks_local)
-
-        collated_global_masks = [[cm[:min_keep_global_patches] for cm in masks] for masks in collated_global_masks]
-        collated_local_masks = [[cm[:min_keep_local_patches] for cm in masks] for masks in collated_local_masks]
-
-        local_masks = torch.stack(data.default_collate(collated_local_masks), dim=0).to(x.device)
-        global_masks = torch.stack(data.default_collate(collated_global_masks), dim=0).to(x.device)
-        ibot_masks = torch.stack(data.default_collate(collated_ibot_masks), dim=0).to(x.device)
+        global_masks = self._sample_random_masks_gpu(
+            self.num_global_masks,
+            batch_size,
+            num_sensors,
+            global_num_keep,
+            device,
+            generator,
+        )
+        local_masks = self._sample_random_masks_gpu(
+            self.num_local_masks,
+            batch_size,
+            num_sensors,
+            local_num_keep,
+            device,
+            generator,
+        )
+        ibot_masks = self._sample_ibot_masks_gpu(
+            batch_size,
+            num_sensors,
+            global_num_keep,
+            device,
+            generator,
+        )
 
         return global_masks, local_masks, ibot_masks
+
+    def sample_masks(self, x):
+        if not x.is_cuda:
+            raise RuntimeError("BraincoDINOv2Module.sample_masks requires CUDA tensors.")
+        if not self.use_random_mask:
+            raise NotImplementedError("GPU mask sampling only supports use_random_mask=True.")
+        if not self.allow_mask_overlap:
+            raise NotImplementedError("GPU mask sampling requires allow_mask_overlap=True.")
+        return self._sample_masks_gpu(x)
 
     def forward(
         self,

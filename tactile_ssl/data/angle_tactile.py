@@ -16,7 +16,14 @@ _FINGERTIP_INDICES = [4, 8, 12, 16, 20]  # MediaPipe fingertip joint indices
 class _AngleSequenceData:
     """Loaded sequence with angle and contact data."""
 
-    __slots__ = ("rh_angles", "lh_angles", "rh_contact", "lh_contact")
+    __slots__ = (
+        "rh_angles",
+        "lh_angles",
+        "rh_contact",
+        "lh_contact",
+        "finger_angles",
+        "joint_contact",
+    )
 
     def __init__(
         self,
@@ -29,6 +36,12 @@ class _AngleSequenceData:
         self.lh_angles = lh_angles
         self.rh_contact = rh_contact
         self.lh_contact = lh_contact
+        self.finger_angles = torch.from_numpy(
+            np.concatenate([lh_angles, rh_angles], axis=1)
+        )
+        self.joint_contact = torch.from_numpy(
+            np.concatenate([lh_contact, rh_contact], axis=1)
+        )
 
 
 def _load_angle_sequence(path: Path) -> _AngleSequenceData:
@@ -118,12 +131,12 @@ class AngleTactileDataset(data.Dataset):
                 self.windows.append((seq_idx, start))
         log.info(f"  Total windows: {len(self.windows)}")
 
-        self.window_labels: List[int] = []
+        window_labels: List[int] = []
         for seq_idx, start in self.windows:
             seq = self._sequences[seq_idx]
             lh_c = seq.lh_contact[start: start + self.window_size]
             rh_c = seq.rh_contact[start: start + self.window_size]
-            self.window_labels.append(self._compute_classification_id(lh_c, rh_c))
+            window_labels.append(self._compute_classification_id(lh_c, rh_c))
 
         _CLASS_NAMES = {
             0: "no touch",
@@ -134,12 +147,13 @@ class AngleTactileDataset(data.Dataset):
             5: "both hands",
         }
         from collections import Counter
-        total = len(self.window_labels)
-        counts = Counter(self.window_labels)
+        total = len(window_labels)
+        counts = Counter(window_labels)
         log.info("  classification_id distribution:")
         for cls in range(6):
             cnt = counts.get(cls, 0)
             log.info(f"    [{cls}] {_CLASS_NAMES[cls]:22s}: {cnt:6d}  ({100*cnt/total:.1f}%)")
+        self.window_labels = torch.tensor(window_labels, dtype=torch.long)
 
     @staticmethod
     def _compute_classification_id(
@@ -176,17 +190,10 @@ class AngleTactileDataset(data.Dataset):
         seq = self._sequences[seq_idx]
         end = start + self.window_size
 
-        finger_angles = np.concatenate(
-            [seq.lh_angles[start:end], seq.rh_angles[start:end]], axis=1
-        )  # (W, 10, 4)
-        joint_contact = np.concatenate(
-            [seq.lh_contact[start:end], seq.rh_contact[start:end]], axis=1
-        )  # (W, 42, 1)
-
         return {
-            "finger_angles": torch.from_numpy(finger_angles).float(),
-            "joint_contact": torch.from_numpy(joint_contact).float(),
-            "classification_id": torch.tensor(self.window_labels[idx], dtype=torch.long),
+            "finger_angles": seq.finger_angles[start:end],
+            "joint_contact": seq.joint_contact[start:end],
+            "classification_id": self.window_labels[idx],
         }
 
 
