@@ -108,6 +108,7 @@ class AngleTransformer(SignalTransformer):
         normalization: Optional[DictConfig] = None,
         fine_tune_sensor: bool = False,
         fine_tune_sensor_shallow_blocks: Optional[int] = 0,
+        rope_hand_offset: int = 100,
         debug_rope: bool = False,
     ):
         assert sequence_length % time_chunk_size == 0, (
@@ -151,6 +152,7 @@ class AngleTransformer(SignalTransformer):
         self.pos_in_dim  = pos_in_dim
         self.pos_in_chans = pos_in_chans
         self.use_rope = pos_embed_fn in {"rope", "multimodal_rope", "mrope"}
+        self.rope_hand_offset = rope_hand_offset
         self.pos_token_dim = pos_in_dim
         self.pre_fusion_depth = pre_fusion_depth if pre_fusion_depth is not None else depth // 4
         self.fine_tune_sensor_shallow_blocks = (
@@ -227,6 +229,7 @@ class AngleTransformer(SignalTransformer):
             f"N_angle_tokens={self.pos_token_dim}, "
             f"pre_fusion_depth={self.pre_fusion_depth}, embed_dim={D}, "
             f"pos_embed_fn={pos_embed_fn}, "
+            f"rope_hand_offset={self.rope_hand_offset}, "
             f"use_null_token={self.use_null_token}, "
             f"fine_tune_sensor={self.fine_tune_sensor}, "
             f"fine_tune_sensor_shallow_blocks={self.fine_tune_sensor_shallow_blocks}"
@@ -278,7 +281,7 @@ class AngleTransformer(SignalTransformer):
 
     def _finger_coords(self, n: int, device: torch.device) -> torch.Tensor:
         idx = torch.arange(n, device=device, dtype=torch.float32)
-        hand = torch.div(idx, n // 2, rounding_mode="floor")
+        hand = torch.div(idx, n // 2, rounding_mode="floor") * self.rope_hand_offset
         finger = idx.remainder(n // 2)
         joint = torch.full_like(finger, -1.0)
         return torch.stack([hand, finger, joint], dim=-1)
@@ -287,7 +290,7 @@ class AngleTransformer(SignalTransformer):
         idx = torch.arange(n, device=device, dtype=torch.float32)
         per_hand = n // 2
         local = idx.remainder(per_hand)
-        hand = torch.div(idx, per_hand, rounding_mode="floor")
+        hand = torch.div(idx, per_hand, rounding_mode="floor") * self.rope_hand_offset
         finger = torch.full_like(local, -1.0)
         joint = torch.full_like(local, -1.0)
 

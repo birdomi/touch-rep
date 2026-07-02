@@ -4,7 +4,7 @@ defaults:
   - /experiment/brainco/ours_vectors/dinov2_pretraining_all
   - _self_
 
-experiment_name: dinov2_all_${model_size}_rope
+experiment_name: dinov2_all_${model_size}_rope_offset
 
 wandb:
   group: dino_all_${model_size}_rope
@@ -14,5 +14,5 @@ algorithm:
   encoder:
     # Multimodal RoPE over hand/finger axes; angle joint values remain channels.
     pos_embed_fn: rope
-    rope_hand_offset: 0
+    rope_hand_offset: 100
     debug_rope: true
