@@ -16,7 +16,7 @@ wandb:
   tags: ["all", "oakinkv2", "arctic", "taco", "hot3d", "${model_size}"]
 
 trainer:
-  max_epochs: 500
+  max_epochs: 50
   validation_frequency: 50
 
 algorithm:

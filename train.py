@@ -176,6 +176,121 @@ def get_dataloaders_all_vector_based(cfg: DictConfig):
     return train_dset, val_dset
 
 
+def _compute_multichannel_contact_stats(sequences, num_channels: int):
+    channel_sum = np.zeros(num_channels, dtype=np.float64)
+    channel_sq_sum = np.zeros(num_channels, dtype=np.float64)
+    count = 0
+    for sequence in sequences:
+        for contact in (sequence.lh_contact, sequence.rh_contact):
+            values = contact.reshape(-1, num_channels).astype(np.float64, copy=False)
+            channel_sum += values.sum(axis=0)
+            channel_sq_sum += np.square(values).sum(axis=0)
+            count += values.shape[0]
+
+    if count == 0:
+        return [0.0] * num_channels, [1.0] * num_channels
+
+    mean = channel_sum / count
+    variance = np.maximum(channel_sq_sum / count - np.square(mean), 0.0)
+    std = np.sqrt(variance)
+    std[std <= 1e-6] = 1.0
+    return mean.astype(np.float32).tolist(), std.astype(np.float32).tolist()
+
+
+def get_dataloaders_all_pseudo_force_based(cfg: DictConfig):
+    from tactile_ssl.data.pseudo_force_tactile import (
+        FORCE_CHANNELS,
+        CompactPseudoForceDataset,
+    )
+
+    data_cfg = cfg.data
+    paths = [
+        ("HOT3D", str(data_cfg.hot3d_data_root)),
+        ("ARCTIC", str(data_cfg.arctic_data_root)),
+        ("TACO", str(data_cfg.taco_data_root)),
+        ("OAKINKV2", str(data_cfg.oakinkv2_data_root)),
+    ]
+    dataset_kwargs = {
+        "window_size": int(data_cfg.get("window_size", 1)),
+        "window_stride": int(data_cfg.get("window_stride", 1)),
+        "train_val_split": float(data_cfg.get("train_val_split", 0.9)),
+        "sensor_output_key": str(cfg.algorithm.get("sensor_input_key", "joint_contact")),
+    }
+
+    train_dsets, val_dsets, all_train_sequences = [], [], []
+    for name, path in paths:
+        logger.info(f"Loading {name} compact pseudo-force data from {path}")
+        train_ds = CompactPseudoForceDataset(data_root=path, split="train", **dataset_kwargs)
+        val_ds = CompactPseudoForceDataset(data_root=path, split="val", **dataset_kwargs)
+        train_dsets.append(train_ds)
+        val_dsets.append(val_ds)
+        all_train_sequences.extend(train_ds._sequences)
+        logger.info(f"  {name}: train={len(train_ds)} val={len(val_ds)}")
+
+    sensor_mean, sensor_std = _compute_multichannel_contact_stats(
+        all_train_sequences, len(FORCE_CHANNELS)
+    )
+    logger.info(
+        f"Pseudo-force channel order={FORCE_CHANNELS}, "
+        f"mean={sensor_mean}, std={sensor_std}"
+    )
+    with open_dict(cfg):
+        cfg.data.normalization.mean = sensor_mean
+        cfg.data.normalization.std = sensor_std
+
+    for dataset in train_dsets + val_dsets:
+        dataset.sensor_mean = sensor_mean
+        dataset.sensor_std = sensor_std
+
+    train_dset = data.ConcatDataset(train_dsets)
+    val_dset = data.ConcatDataset(val_dsets)
+    train_dset.sensor_mean = sensor_mean
+    train_dset.sensor_std = sensor_std
+    val_dset.sensor_mean = sensor_mean
+    val_dset.sensor_std = sensor_std
+
+    logger.info(
+        f"ALL pseudo-force: {len(train_dset)} train windows, "
+        f"{len(val_dset)} val windows"
+    )
+    return train_dset, val_dset
+
+
+def get_dataloaders_compact_pseudo_force_based(cfg: DictConfig):
+    from tactile_ssl.data.pseudo_force_tactile import (
+        FORCE_CHANNELS,
+        CompactPseudoForceDataset,
+    )
+
+    data_cfg = cfg.data
+    dataset_kwargs = {
+        "data_root": str(data_cfg.data_root),
+        "window_size": int(data_cfg.get("window_size", 1)),
+        "window_stride": int(data_cfg.get("window_stride", 1)),
+        "train_val_split": float(data_cfg.get("train_val_split", 0.9)),
+        "sensor_output_key": str(cfg.algorithm.get("sensor_input_key", "joint_contact")),
+    }
+    train_dset = CompactPseudoForceDataset(split="train", **dataset_kwargs)
+    val_dset = CompactPseudoForceDataset(split="val", **dataset_kwargs)
+
+    sensor_mean, sensor_std = _compute_multichannel_contact_stats(
+        train_dset._sequences, len(FORCE_CHANNELS)
+    )
+    with open_dict(cfg):
+        cfg.data.normalization.mean = sensor_mean
+        cfg.data.normalization.std = sensor_std
+
+    for dataset in (train_dset, val_dset):
+        dataset.sensor_mean = sensor_mean
+        dataset.sensor_std = sensor_std
+
+    logger.info(
+        f"Compact pseudo-force: train={len(train_dset)} val={len(val_dset)}, "
+        f"channel order={FORCE_CHANNELS}, mean={sensor_mean}, std={sensor_std}"
+    )
+    return train_dset, val_dset
+
+
 def get_dataloaders_brainco_based(cfg: DictConfig):
     data_cfg = cfg.data
 
@@ -370,6 +485,10 @@ def get_dataloaders(cfg: DictConfig):
         train_dset, val_dset = get_dataloaders_oakinkv2_vector_based(cfg)
     elif cfg.data.sensor == "all_vector":
         train_dset, val_dset = get_dataloaders_all_vector_based(cfg)
+    elif cfg.data.sensor == "all_pseudo_force":
+        train_dset, val_dset = get_dataloaders_all_pseudo_force_based(cfg)
+    elif cfg.data.sensor == "compact_pseudo_force":
+        train_dset, val_dset = get_dataloaders_compact_pseudo_force_based(cfg)
     else:
         raise NotImplementedError(f"Sensor type '{cfg.data.sensor}' is not part of the BrainCo-only setup.")
 

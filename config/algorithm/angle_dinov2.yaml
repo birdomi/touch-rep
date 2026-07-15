@@ -37,7 +37,7 @@ use_random_mask: true
 moving_average_decay: [0.994, 1.0]
 allow_mask_overlap: True
 teacher_temp: [0.04, 0.07]
-teacher_warmup_epochs: 10
+teacher_warmup_epochs: 2
 
 optim_cfg:
   _partial_: True

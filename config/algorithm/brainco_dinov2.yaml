@@ -27,13 +27,13 @@ use_random_mask: true
 moving_average_decay: [0.994, 1.0]
 allow_mask_overlap: True
 teacher_temp: [0.04, 0.07]
-teacher_warmup_epochs: 10
+teacher_warmup_epochs: 2
 
 optim_cfg:
   _partial_: True
   _target_: torch.optim.AdamW
   lr: 1e-4
-  weight_decay: 0.0005
+  weight_decay: 0.005
 
 lr_scheduler_cfg:
   _partial_: True
@@ -47,8 +47,8 @@ lr_scheduler_cfg:
 wd_scheduler_cfg:
   _partial_: True
   _target_: tactile_ssl.model.custom_scheduler.CosineWDSchedule
-  final_weight_decay: 0.4
-  ref_weight_decay: 0.04
+  final_weight_decay: 0.04
+  ref_weight_decay: 0.004
   T_max: ???
 
 online_probes:

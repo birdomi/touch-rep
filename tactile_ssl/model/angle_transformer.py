@@ -37,6 +37,7 @@ log = get_pylogger(__name__)
 # Left hand:  thumb=4, index=8,  middle=12, ring=16, pinky=20
 # Right hand: thumb=25,index=29, middle=33, ring=37, pinky=41
 FULL_SKELETON_SIZE = 42
+SKELETON_JOINTS_PER_FINGER = 4
 TACTILE_SENSOR_IDXS = [4, 8, 12, 16, 20, 25, 29, 33, 37, 41]
 ROPE_AXIS_NAMES = ("hand", "finger", "joint")
 
@@ -298,10 +299,10 @@ class AngleTransformer(SignalTransformer):
         local_finger = local[is_finger_joint] - 1
         finger[is_finger_joint] = torch.div(
             local_finger,
-            self.pos_in_chans,
+            SKELETON_JOINTS_PER_FINGER,
             rounding_mode="floor",
         )
-        joint[is_finger_joint] = local_finger.remainder(self.pos_in_chans)
+        joint[is_finger_joint] = local_finger.remainder(SKELETON_JOINTS_PER_FINGER)
         return torch.stack([hand, finger, joint], dim=-1)
 
     def _rope_positions(self, x: torch.Tensor, stream: str) -> torch.Tensor:

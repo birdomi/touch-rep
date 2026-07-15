@@ -2,8 +2,8 @@
 
 Inputs
 ------
-xs  (joint_contact)   : (B, T, N_joints, 1)  — contact per joint
-pos (finger_angles)   : (B, T, N_fingers, 4) — finger angle vectors
+xs  (joint_contact) : (B, T, N_joints, C) — per-joint sensor values
+pos (configurable)  : (B, T, N_fingers, P) — angle vectors or fingertip XYZ
 
 No wrist_poses or sensor_id routing needed.
 """
@@ -25,7 +25,8 @@ class AngleDinov2Module(BraincoDINOv2Module):
     - Dual-stream pos masking (sensor + angle streams masked independently).
     - Optional classification head on the student CLS token.
 
-    Batch keys: ``joint_contact`` → xs,  ``finger_angles`` → pos.
+    Batch keys default to ``joint_contact`` → xs and ``finger_angles`` → pos,
+    and can be changed for datasets such as the pseudo-force XYZ dataset.
     """
 
     def __init__(
@@ -34,12 +35,16 @@ class AngleDinov2Module(BraincoDINOv2Module):
         classification_num_classes: int = 6,
         classification_target_key: str = "classification_id",
         classification_loss_weight: float = 1.0,
+        sensor_input_key: str = "joint_contact",
+        pos_input_key: str = "finger_angles",
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.use_classification_loss = classification_loss
         self.classification_target_key = classification_target_key
         self.classification_loss_weight = classification_loss_weight
+        self.sensor_input_key = sensor_input_key
+        self.pos_input_key = pos_input_key
 
         if self.use_classification_loss:
             embed_dim = self.student_encoder_dict["backbone"].embed_dim
@@ -263,8 +268,8 @@ class AngleDinov2Module(BraincoDINOv2Module):
         self.step += 1
         self.generator.manual_seed(self.step)
 
-        xs  = batch["joint_contact"]   # (B, T, N_joints, 1)
-        pos = batch["finger_angles"]   # (B, T, N_fingers, 4)
+        xs = batch[self.sensor_input_key]
+        pos = batch[self.pos_input_key]
 
         if self.use_classification_loss and self.classification_target_key not in batch:
             raise KeyError(

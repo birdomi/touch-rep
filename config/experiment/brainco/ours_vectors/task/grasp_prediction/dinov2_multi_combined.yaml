@@ -23,7 +23,7 @@ wandb:
   tags: ["angle", "grasp_prediction", "combined", "pretrained"]
 
 task:
-  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_angle/epoch-0190-all.ckpt
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_angle/epoch-0200-all.ckpt
   # checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_angle/epoch-5000-brainco.ckpt
 
   train_encoder: true

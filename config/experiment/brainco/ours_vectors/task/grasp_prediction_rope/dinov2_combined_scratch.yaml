@@ -1,0 +1,30 @@
+# @package _global_
+
+defaults:
+  - override /data: brainco_angle_grasp_prediction_combined
+  - override /task: brainco_angle_grasp_prediction
+  - _self_
+
+ssl_name: dinov2
+sensor: brainco_angle
+experiment_name: angle_grasp_prediction_rope_combined_scratch
+
+ckpt_path: ./
+resume_id: ~
+
+fold: 0
+num_folds: 4
+
+wandb:
+  entity: ryk9012-gwangju-institute-of-science-and-technology
+  project: brainco_angle_grasp_prediction
+  group: angle_grasp_prediction_rope_combined_scratch
+  tags: ["angle", "grasp_prediction", "combined", "scratch", "rope"]
+
+task:
+  checkpoint_encoder: ~
+  train_encoder: true
+
+  model_encoder:
+    pos_embed_fn: rope
+    debug_rope: true
