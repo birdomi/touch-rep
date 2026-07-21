@@ -1,0 +1,51 @@
+train_dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: true
+  drop_last: true
+  pin_memory: true
+  persistent_workers: true
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: false
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+sensor: brainco_xyz_grasp_prediction
+train_data_budget: 1.0
+val_data_budget: 1.0
+
+window_time: 0.3
+window_overlap: 0.0
+interpolating_freq: 100
+
+dataset:
+  _target_: tactile_ssl.data.brainco_xyz_grasp_dataset.BraincoXYZGraspDataset
+  config:
+    window_time: ${data.window_time}
+    window_overlap: ${data.window_overlap}
+    interpolating_freq: ${data.interpolating_freq}
+    subtract_baseline: true
+    align_xyz_to_npz: true
+    data_roots:
+      - data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_0611
+        label_dirs:
+          box_succ: 1
+          box_fail: 0
+          tumbler_succ: 1
+          tumbler_fail: 0
+          eraser_succ: 1
+          eraser_fail: 0
+          driver_succ: 1
+          driver_fail: 0
+          case_succ: 1
+          case_fail: 0
+  data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_0611
+  brainco_urdf_path: ${paths.data_root}/brainco/urdf
+
+# Set this to a second BraincoXYZGraspDataset for a fixed validation set.
+# When null, train_task_brainco_angle.py performs episode-level K-fold splitting.
+val_dataset: null

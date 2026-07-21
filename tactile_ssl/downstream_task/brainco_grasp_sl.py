@@ -269,6 +269,7 @@ class BraincoGraspDetectionSLModule(SLModule):
         lora_target_modules: tuple = ("qkv", "proj"),
         encoder_warmup_fine_tune_sensor_epochs: int = 0,
         encoder_warmup_fine_tune_sensor_shallow_blocks: Optional[int] = None,
+        log_confusion_matrix_image: bool = True,
     ):
         super().__init__(
             model_encoder=model_encoder,
@@ -286,6 +287,7 @@ class BraincoGraspDetectionSLModule(SLModule):
         )
         self.encoder_warmup_fine_tune_sensor_epochs = int(encoder_warmup_fine_tune_sensor_epochs)
         self.encoder_warmup_fine_tune_sensor_shallow_blocks = encoder_warmup_fine_tune_sensor_shallow_blocks
+        self.log_confusion_matrix_image = bool(log_confusion_matrix_image)
         self._encoder_warmup_mode = None
         self._encoder_warmup_epoch_idx = 0
         if self.encoder_warmup_fine_tune_sensor_epochs < 0:
@@ -533,22 +535,24 @@ class BraincoGraspDetectionSLModule(SLModule):
         log.info(f"Confusion Matrix (Normalized):\n{cm}")
         log.info("="*40)
 
-        display_labels = (
-            ["Fail", "Success"] if self.num_classes == 2 else [str(c) for c in class_labels]
-        )
-        disp = ConfusionMatrixDisplay(
-            confusion_matrix=cm,
-            display_labels=display_labels,
-        )
-        disp.plot(cmap="Blues")
-        fig = disp.ax_.get_figure()
-        fig.set_figwidth(6)
-        fig.set_figheight(6)
-        plt.tight_layout()
-        img_buf = io.BytesIO()
-        plt.savefig(img_buf, format="png")
-        plt.close("all")
-        im = Image.open(img_buf)
+        confusion_matrix_image = None
+        if self.log_confusion_matrix_image:
+            display_labels = (
+                ["Fail", "Success"] if self.num_classes == 2 else [str(c) for c in class_labels]
+            )
+            disp = ConfusionMatrixDisplay(
+                confusion_matrix=cm,
+                display_labels=display_labels,
+            )
+            disp.plot(cmap="Blues")
+            fig = disp.ax_.get_figure()
+            fig.set_figwidth(6)
+            fig.set_figheight(6)
+            plt.tight_layout()
+            img_buf = io.BytesIO()
+            plt.savefig(img_buf, format="png")
+            plt.close("all")
+            confusion_matrix_image = Image.open(img_buf)
 
         self.last_val_metrics = {"accuracy": accuracy, "f1": f1}
         if accuracy > self.best_val_metrics.get("accuracy", -1.0):
@@ -560,12 +564,16 @@ class BraincoGraspDetectionSLModule(SLModule):
             log.info(f"New best val accuracy: {accuracy:.4f} — weights saved.")
 
         if trainer_instance is not None:
-            trainer_instance.wandb.log({
-                "val/confusion_matrix": trainer_instance.wandb.Image(im),
+            val_log = {
                 "val/overall_accuracy": accuracy,
                 "val/f1_score": f1,
                 "epoch": trainer_instance.current_epoch,
-            })
+            }
+            if confusion_matrix_image is not None:
+                val_log["val/confusion_matrix"] = trainer_instance.wandb.Image(
+                    confusion_matrix_image
+                )
+            trainer_instance.wandb.log(val_log)
 
             # Print + visualize misclassified samples — only on the last epoch
             is_last_epoch = (trainer_instance.current_epoch >= trainer_instance.max_epochs - 1)

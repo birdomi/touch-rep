@@ -1,0 +1,47 @@
+train_dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: true
+  drop_last: true
+  pin_memory: true
+  persistent_workers: true
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: false
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+sensor: brainco_xyz_slip_detection
+class_names:
+  0: non-slip
+  1: slip
+train_data_budget: 1.0
+val_data_budget: 1.0
+
+# BraincoSSLDataset still needs these values while loading tactile/FK data.
+# The slip adapter constructs its own non-overlapping three-frame windows.
+window_time: 0.03
+window_overlap: 0.0
+interpolating_freq: 100
+
+dataset:
+  _target_: tactile_ssl.data.brainco_xyz_slip_detection_dataset.BraincoXYZSlipDetectionDataset
+  config:
+    window_time: ${data.window_time}
+    window_overlap: ${data.window_overlap}
+    interpolating_freq: ${data.interpolating_freq}
+    subtract_baseline: true
+    align_xyz_to_npz: true
+    input_window_frames: 3
+    input_window_stride: 3
+    # Object folders to include. Keep this explicit so ID and leave-one-object-out
+    # experiments always use the same three-object universe.
+    classes: [slip_doll, slip_evacase, slip_pot]
+  data_path: ${paths.data_root}/brainco/downstream/slip_detection
+  brainco_urdf_path: ${paths.data_root}/brainco/urdf
+
+# When null, train_task_brainco_angle.py performs an episode-level K-fold split.
+val_dataset: null

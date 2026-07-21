@@ -1,4 +1,4 @@
-"""BraincoAngleGraspSLModule: grasp prediction with AngleTransformer encoder."""
+"""BrainCo grasp prediction with an AngleTransformer-style dual encoder."""
 
 from functools import partial
 from typing import Any, Dict, Optional
@@ -12,22 +12,22 @@ from .brainco_grasp_sl import BraincoGraspDetectionSLModule
 class BraincoAngleGraspSLModule(BraincoGraspDetectionSLModule):
     """Grasp success/fail prediction using AngleTransformer.
 
-    Reads ``joint_contact`` and ``finger_angles`` from the batch instead of
-    ``sensor`` and ``sensor_poses``.
+    Reads ``joint_contact`` plus either ``finger_angles`` or ``finger_xyz``.
 
     Batch keys:
         joint_contact  : (B, W, 10, 4)  — tactile contact per sensor
-        finger_angles  : (B, W, 10, 4)  — finger angle encoding
+        finger_angles  : (B, W, 10, 4)  — optional finger angle encoding
+        finger_xyz     : (B, W, 10, 3)  — optional wrist-local fingertip XYZ
         label          : (B,)  long
     """
 
-    def encode(self, joint_contact: torch.Tensor, finger_angles: torch.Tensor,
+    def encode(self, joint_contact: torch.Tensor, position_input: torch.Tensor,
                mask=None) -> torch.Tensor:
-        """Encode windowed angle+contact data through AngleTransformer.
+        """Encode windowed contact and angle/XYZ data through AngleTransformer.
 
         Args:
             joint_contact : (B, W, 10, 4)
-            finger_angles : (B, W, 10, 4)
+            position_input : (B, W, 10, C_pos)
             mask          : optional (B, W) bool
 
         Returns:
@@ -36,8 +36,8 @@ class BraincoAngleGraspSLModule(BraincoGraspDetectionSLModule):
         B, W, N, C = joint_contact.shape
 
         xs  = joint_contact.view(B * W, 1, N, C)                  # (B*W, T=1, 10, 4)
-        pos = finger_angles.view(B * W, 1, finger_angles.shape[2],
-                                 finger_angles.shape[3])           # (B*W, T=1, 10, 4)
+        pos = position_input.view(B * W, 1, position_input.shape[2],
+                                  position_input.shape[3])
 
         ctx = torch.no_grad() if not self.train_encoder else torch.enable_grad()
         with ctx:
@@ -54,10 +54,13 @@ class BraincoAngleGraspSLModule(BraincoGraspDetectionSLModule):
 
     def forward(self, batch: Dict[str, Any]) -> torch.Tensor:
         joint_contact = batch["joint_contact"]   # (B, W, 10, 4)
-        finger_angles = batch["finger_angles"]   # (B, W, 10, 4)
+        if "finger_xyz" in batch:
+            position_input = batch["finger_xyz"]
+        else:
+            position_input = batch["finger_angles"]
         mask          = batch.get("mask", None)
 
-        embeddings = self.encode(joint_contact, finger_angles, mask)   # (B, W, D)
+        embeddings = self.encode(joint_contact, position_input, mask)   # (B, W, D)
 
         if self.train_encoder:
             logits = self.classifier(embeddings)

@@ -1,0 +1,26 @@
+# @package _global_
+
+# Three-frame pseudo-force/XYZ temporal patches. Each joint and fingertip is
+# projected from its three consecutive frames into one 192-D token.
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_pretraining_all_rope
+  - _self_
+
+experiment_name: dinov2_all_pseudo_force_${model_size}_rope_temporal3
+
+wandb:
+  group: dino_all_pseudo_force_${model_size}_rope_temporal3
+  tags: ["all", "pseudo_force", "4d", "${model_size}", "rope", "temporal3"]
+
+data:
+  # Produces non-overlapping (B, 3, 42, 4) pseudo-force and
+  # (B, 3, 10, 3) XYZ samples.
+  window_size: 3
+  window_stride: 3
+
+algorithm:
+  encoder:
+    # Conv1d kernel/stride=3 reduces the time dimension to one patch token:
+    # sensor (B, 42, 192), XYZ (B, 10, 192).
+    sequence_length: 3
+    time_chunk_size: 3

@@ -1,0 +1,25 @@
+# @package _global_
+
+defaults:
+  - override /data: brainco_xyz_slip_detection
+  - override /task: brainco_xyz_slip_detection
+  - _self_
+
+ssl_name: dinov2
+sensor: brainco_xyz
+experiment_name: brainco_xyz_slip_detection_all_rope_scratch
+ckpt_path: ./
+resume_id: ~
+
+fold: 0
+num_folds: 5
+
+wandb:
+  entity: ryk9012-gwangju-institute-of-science-and-technology
+  project: brainco_xyz_slip_detection
+  group: all_pseudo_force_rope_scratch
+  tags: ["brainco", "xyz", "slip_detection", "all", "scratch", "rope"]
+
+task:
+  checkpoint_encoder: ~
+  train_encoder: true

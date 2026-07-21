@@ -1,9 +1,14 @@
 """train_task_brainco_angle.py
 
-Downstream grasp prediction using AngleTransformer encoder +
-BraincoAngleGraspDataset (joint_contact + finger_angles).
+Downstream grasp prediction using AngleTransformer encoder with either
+BraincoAngleGraspDataset (joint_contact + finger_angles) or
+BraincoXYZGraspDataset (joint_contact + finger_xyz).
 
 Usage:
+    # BrainCo tactile + fingertip XYZ with ours_3d pretraining_all
+    XFORMERS_DISABLED=TRUE python train_task_brainco_angle.py \\
+        +experiment=brainco/ours_3d/task/grasp_prediction/dinov2_all_rope.yaml
+
     XFORMERS_DISABLED=TRUE python train_task_brainco_angle.py \\
         +experiment=brainco/ours_vectors/task/grasp_prediction/dinov2_multi_scratch.yaml
 
@@ -55,7 +60,7 @@ def init_wandb(cfg: DictConfig):
 # ── dataloader ────────────────────────────────────────────────────────────────
 
 def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
-    """K-fold episode split + normalization for BraincoAngleGraspDataset."""
+    """K-fold episode split for BrainCo angle/XYZ downstream datasets."""
     import random
 
     data_cfg   = cfg.data
@@ -88,7 +93,10 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
         val_dataset.computed_signal_mean = signal_mean
         val_dataset.computed_signal_std  = signal_std
 
-        CLASS_NAMES = {0: "Fail", 1: "Success"}
+        CLASS_NAMES = {
+            int(label): str(name)
+            for label, name in data_cfg.get("class_names", {0: "Fail", 1: "Success"}).items()
+        }
 
         def _ep_names(dset):
             return [Path(ep["path"]).parent.name + "/" + Path(ep["path"]).name for ep in dset.episode_data]
@@ -105,7 +113,7 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
             "Computing normalization stats from training data ...",
             f"[NormStats] signal_mean: {signal_mean.tolist()}",
             f"[NormStats] signal_std:  {signal_std.tolist()}",
-            "  (finger_angles: NOT normalized)",
+            "  (position stream: NOT normalized)",
             "=== Class Distribution ===",
         ]
         for tag, dset, idx in [("Train", dataset, train_indices), ("Val", val_dataset, val_indices)]:
@@ -113,7 +121,7 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
             lines.append(f"  {tag}:")
             for cls in sorted(d):
                 cnt = d[cls]
-                lines.append(f"    [{cls}] {CLASS_NAMES[cls]:8s}: {cnt:5d}  ({100*cnt/len(idx):.1f}%)")
+                lines.append(f"    [{cls}] {CLASS_NAMES.get(cls, str(cls)):8s}: {cnt:5d}  ({100*cnt/len(idx):.1f}%)")
         lines.append("=" * 26)
 
         split_log = "\n".join(lines)
@@ -198,13 +206,16 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
 
     lines.append(f"[NormStats] signal_mean: {signal_mean.tolist()}")
     lines.append(f"[NormStats] signal_std:  {signal_std.tolist()}")
-    lines.append("  (finger_angles: NOT normalized)")
+    lines.append("  (position stream: NOT normalized)")
 
     dataset.computed_signal_mean = signal_mean
     dataset.computed_signal_std  = signal_std
 
     # ── Class distribution ────────────────────────────────────────────────────
-    CLASS_NAMES = {0: "Fail", 1: "Success"}
+    CLASS_NAMES = {
+        int(label): str(name)
+        for label, name in data_cfg.get("class_names", {0: "Fail", 1: "Success"}).items()
+    }
 
     def _dist(indices):
         return Counter(dataset.windows[i]["label"].item() for i in indices)
@@ -215,7 +226,7 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
         lines.append(f"  {tag}:")
         for cls in sorted(d):
             cnt = d[cls]
-            lines.append(f"    [{cls}] {CLASS_NAMES[cls]:8s}: {cnt:5d}  ({100*cnt/len(idx):.1f}%)")
+            lines.append(f"    [{cls}] {CLASS_NAMES.get(cls, str(cls)):8s}: {cnt:5d}  ({100*cnt/len(idx):.1f}%)")
     lines.append("=" * 26)
 
     split_log = "\n".join(lines)
@@ -340,7 +351,11 @@ def get_dataloader_brainco_angle_oc(cfg: DictConfig):
 
 
 def get_dataloaders(cfg: DictConfig):
-    if cfg.data.sensor == "brainco_angle_grasp_prediction":
+    if cfg.data.sensor in {
+        "brainco_angle_grasp_prediction",
+        "brainco_xyz_grasp_prediction",
+        "brainco_xyz_slip_detection",
+    }:
         return get_dataloader_brainco_angle_grasp(cfg), None
     if cfg.data.sensor == "brainco_angle_object_classification":
         return get_dataloader_brainco_angle_oc(cfg), None
