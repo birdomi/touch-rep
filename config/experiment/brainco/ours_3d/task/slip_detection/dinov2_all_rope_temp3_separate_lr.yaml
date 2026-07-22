@@ -1,0 +1,17 @@
+# @package _global_
+
+# Optional discriminative fine-tuning LR for the pretrained temporal XYZ
+# encoder. The pooler and classification head use task_lr.
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/dinov2_all_rope_temp3
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_all_rope_temp3_pretrained_separate_lr
+
+wandb:
+  group: all_pseudo_force_rope_temporal3_pretrained_separate_lr
+  tags: ["brainco", "xyz", "slip_detection", "pretrained", "rope", "temporal3", "separate_lr"]
+
+task:
+  encoder_lr: 1e-4
+  task_lr: 1e-3

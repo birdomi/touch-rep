@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/dinov2_all_rope_temp3
+  - _self_
+
+experiment_name: brainco_xyz_grasp_prediction_all_rope_temp3_scratch
+
+wandb:
+  group: all_pseudo_force_rope_temporal3_scratch
+  tags: ["brainco", "xyz", "grasp_prediction", "all", "scratch", "rope", "temporal3"]
+
+task:
+  checkpoint_encoder: null

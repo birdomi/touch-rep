@@ -267,6 +267,8 @@ class BraincoGraspDetectionSLModule(SLModule):
         lora_alpha: float = 1.0,
         lora_dropout: float = 0.0,
         lora_target_modules: tuple = ("qkv", "proj"),
+        encoder_lr: Optional[float] = None,
+        task_lr: Optional[float] = None,
         encoder_warmup_fine_tune_sensor_epochs: int = 0,
         encoder_warmup_fine_tune_sensor_shallow_blocks: Optional[int] = None,
         log_confusion_matrix_image: bool = True,
@@ -285,6 +287,8 @@ class BraincoGraspDetectionSLModule(SLModule):
             lora_alpha=lora_alpha,
             lora_dropout=lora_dropout,
             lora_target_modules=lora_target_modules,
+            encoder_lr=encoder_lr,
+            task_lr=task_lr,
         )
         self.encoder_warmup_fine_tune_sensor_epochs = int(encoder_warmup_fine_tune_sensor_epochs)
         self.encoder_warmup_fine_tune_sensor_shallow_blocks = encoder_warmup_fine_tune_sensor_shallow_blocks

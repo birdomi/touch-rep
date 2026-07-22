@@ -1,0 +1,16 @@
+# @package _global_
+
+# Optional discriminative fine-tuning LR for the pretrained XYZ encoder.
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/dinov2_all_rope
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_all_rope_pretrained_separate_lr
+
+wandb:
+  group: all_pseudo_force_rope_pretrained_separate_lr
+  tags: ["brainco", "xyz", "slip_detection", "pretrained", "rope", "separate_lr"]
+
+task:
+  encoder_lr: 1e-5
+  task_lr: 1e-4

@@ -1,0 +1,22 @@
+# @package _global_
+
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/dinov2_all_rope
+  - _self_
+
+experiment_name: brainco_xyz_grasp_prediction_all_rope_temp3_pretrained
+
+wandb:
+  group: all_pseudo_force_rope_temporal3_pretrained
+  tags: ["brainco", "xyz", "grasp_prediction", "all", "pretrained", "rope", "temporal3"]
+
+data:
+  # 100 Hz에서 정확히 3프레임. overlap=0 설정은 부모 data config를 사용한다.
+  window_time: 0.03
+
+task:
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_xyz_temp/epoch-0100.ckpt
+  train_encoder: true
+  model_encoder:
+    sequence_length: 3
+    time_chunk_size: 3

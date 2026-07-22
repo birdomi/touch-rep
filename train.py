@@ -176,19 +176,32 @@ def get_dataloaders_all_vector_based(cfg: DictConfig):
     return train_dset, val_dset
 
 
-def _compute_multichannel_contact_stats(sequences, num_channels: int):
-    channel_sum = np.zeros(num_channels, dtype=np.float64)
-    channel_sq_sum = np.zeros(num_channels, dtype=np.float64)
+def _compute_multichannel_contact_stats(
+    sequences,
+    num_channels: int,
+    include_force_delta: bool = False,
+):
+    output_channels = num_channels * (2 if include_force_delta else 1)
+    channel_sum = np.zeros(output_channels, dtype=np.float64)
+    channel_sq_sum = np.zeros(output_channels, dtype=np.float64)
     count = 0
     for sequence in sequences:
-        for contact in (sequence.lh_contact, sequence.rh_contact):
-            values = contact.reshape(-1, num_channels).astype(np.float64, copy=False)
+        contact = sequence.joint_contact.numpy()
+        if include_force_delta:
+            delta = np.zeros_like(contact)
+            delta[1:] = contact[1:] - contact[:-1]
+            contact = np.concatenate((contact, delta), axis=-1)
+
+        for hand_contact in (contact[:, :21], contact[:, 21:]):
+            values = hand_contact.reshape(-1, output_channels).astype(
+                np.float64, copy=False
+            )
             channel_sum += values.sum(axis=0)
             channel_sq_sum += np.square(values).sum(axis=0)
             count += values.shape[0]
 
     if count == 0:
-        return [0.0] * num_channels, [1.0] * num_channels
+        return [0.0] * output_channels, [1.0] * output_channels
 
     mean = channel_sum / count
     variance = np.maximum(channel_sq_sum / count - np.square(mean), 0.0)
@@ -215,6 +228,7 @@ def get_dataloaders_all_pseudo_force_based(cfg: DictConfig):
         "window_stride": int(data_cfg.get("window_stride", 1)),
         "train_val_split": float(data_cfg.get("train_val_split", 0.9)),
         "sensor_output_key": str(cfg.algorithm.get("sensor_input_key", "joint_contact")),
+        "include_force_delta": bool(data_cfg.get("include_force_delta", False)),
     }
 
     train_dsets, val_dsets, all_train_sequences = [], [], []
@@ -228,10 +242,15 @@ def get_dataloaders_all_pseudo_force_based(cfg: DictConfig):
         logger.info(f"  {name}: train={len(train_ds)} val={len(val_ds)}")
 
     sensor_mean, sensor_std = _compute_multichannel_contact_stats(
-        all_train_sequences, len(FORCE_CHANNELS)
+        all_train_sequences,
+        len(FORCE_CHANNELS),
+        include_force_delta=dataset_kwargs["include_force_delta"],
     )
+    channel_order = FORCE_CHANNELS
+    if dataset_kwargs["include_force_delta"]:
+        channel_order = FORCE_CHANNELS + tuple(f"delta_{name}" for name in FORCE_CHANNELS)
     logger.info(
-        f"Pseudo-force channel order={FORCE_CHANNELS}, "
+        f"Pseudo-force channel order={channel_order}, "
         f"mean={sensor_mean}, std={sensor_std}"
     )
     with open_dict(cfg):
@@ -269,12 +288,15 @@ def get_dataloaders_compact_pseudo_force_based(cfg: DictConfig):
         "window_stride": int(data_cfg.get("window_stride", 1)),
         "train_val_split": float(data_cfg.get("train_val_split", 0.9)),
         "sensor_output_key": str(cfg.algorithm.get("sensor_input_key", "joint_contact")),
+        "include_force_delta": bool(data_cfg.get("include_force_delta", False)),
     }
     train_dset = CompactPseudoForceDataset(split="train", **dataset_kwargs)
     val_dset = CompactPseudoForceDataset(split="val", **dataset_kwargs)
 
     sensor_mean, sensor_std = _compute_multichannel_contact_stats(
-        train_dset._sequences, len(FORCE_CHANNELS)
+        train_dset._sequences,
+        len(FORCE_CHANNELS),
+        include_force_delta=dataset_kwargs["include_force_delta"],
     )
     with open_dict(cfg):
         cfg.data.normalization.mean = sensor_mean
@@ -284,9 +306,12 @@ def get_dataloaders_compact_pseudo_force_based(cfg: DictConfig):
         dataset.sensor_mean = sensor_mean
         dataset.sensor_std = sensor_std
 
+    channel_order = FORCE_CHANNELS
+    if dataset_kwargs["include_force_delta"]:
+        channel_order = FORCE_CHANNELS + tuple(f"delta_{name}" for name in FORCE_CHANNELS)
     logger.info(
         f"Compact pseudo-force: train={len(train_dset)} val={len(val_dset)}, "
-        f"channel order={FORCE_CHANNELS}, mean={sensor_mean}, std={sensor_std}"
+        f"channel order={channel_order}, mean={sensor_mean}, std={sensor_std}"
     )
     return train_dset, val_dset
 

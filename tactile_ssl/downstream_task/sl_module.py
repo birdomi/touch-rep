@@ -35,12 +35,16 @@ class SLModule(Module, nn.Module):
         lora_alpha: float = 1.0,
         lora_dropout: float = 0.0,
         lora_target_modules: tuple = ("qkv", "proj"),
+        encoder_lr: Optional[float] = None,
+        task_lr: Optional[float] = None,
     ) -> None:
         super().__init__()
         self.model_task: nn.Module = model_task
         self.model_encoder: nn.Module = model_encoder
         self.train_encoder: bool = train_encoder
         self.encoder_type: str = encoder_type
+        self.encoder_lr = encoder_lr
+        self.task_lr = task_lr
 
         if checkpoint_encoder is not None:
             log.info("Loading encoder ONLY from checkpoint.")
@@ -176,13 +180,51 @@ class SLModule(Module, nn.Module):
     ) -> Tuple[torch.optim.Optimizer, Optional[Dict], Optional[Dict]]:
         param_dict = {pn: p for pn, p in self.named_parameters()}
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        use_discriminative_lr = self.encoder_lr is not None or self.task_lr is not None
+        if use_discriminative_lr:
+            if self.encoder_lr is None or self.task_lr is None:
+                raise ValueError(
+                    "encoder_lr and task_lr must be set together for discriminative LR"
+                )
+            encoder_params = {
+                name: param
+                for name, param in param_dict.items()
+                if name.startswith("model_encoder.")
+            }
+            task_params = {
+                name: param
+                for name, param in param_dict.items()
+                if not name.startswith("model_encoder.")
+            }
+            optim_groups = []
+            for params, lr in (
+                (encoder_params, float(self.encoder_lr)),
+                (task_params, float(self.task_lr)),
+            ):
+                decay = [param for param in params.values() if param.dim() >= 2]
+                nodecay = [param for param in params.values() if param.dim() < 2]
+                if decay:
+                    optim_groups.append({"params": decay, "lr": lr})
+                if nodecay:
+                    optim_groups.append({
+                        "params": nodecay,
+                        "lr": lr,
+                        "WD_exclude": True,
+                        "weight_decay": 0.0,
+                    })
+            log.info(
+                f"Discriminative LR: encoder={float(self.encoder_lr):.2e}, "
+                f"task={float(self.task_lr):.2e}"
+            )
+        else:
+            decay_params = [p for p in param_dict.values() if p.dim() >= 2]
+            nodecay_params = [p for p in param_dict.values() if p.dim() < 2]
+            optim_groups = [
+                {"params": decay_params},
+                {"params": nodecay_params, "WD_exclude": True, "weight_decay": 0.0},
+            ]
         decay_params = [p for p in param_dict.values() if p.dim() >= 2]
         nodecay_params = [p for p in param_dict.values() if p.dim() < 2]
-
-        optim_groups = [
-            {"params": decay_params},
-            {"params": nodecay_params, "WD_exclude": True, "weight_decay": 0.0},
-        ]
         num_decay_params = sum(p.numel() for p in decay_params)
         num_nodecay_params = sum(p.numel() for p in nodecay_params)
         log.info(

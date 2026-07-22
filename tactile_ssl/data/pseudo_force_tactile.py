@@ -192,7 +192,9 @@ class PseudoForceAngleDataset(data.Dataset):
 
     Samples contain:
 
-    - ``joint_contact``: ``(W, 42, 4)``
+    - ``joint_contact``: ``(W, 42, 4)`` or ``(W, 42, 8)`` when
+      ``include_force_delta=True``. The extra four channels are the current
+      force minus the preceding frame's force.
     - ``finger_xyz``: ``(W, 10, 3)``
     - ``classification_id``: contact class derived from fingertip normal force
     """
@@ -206,6 +208,7 @@ class PseudoForceAngleDataset(data.Dataset):
         train_val_split: float = 0.9,
         participants: Optional[List[str]] = None,
         sensor_output_key: str = "joint_contact",
+        include_force_delta: bool = False,
         _file_pattern: str = "*.pkl",
         _sequence_loader=_load_pseudo_force_sequence,
     ):
@@ -217,6 +220,7 @@ class PseudoForceAngleDataset(data.Dataset):
         self.window_size = int(window_size)
         self.window_stride = int(window_stride)
         self.sensor_output_key = str(sensor_output_key)
+        self.include_force_delta = bool(include_force_delta)
 
         root = Path(data_root)
         if not root.exists():
@@ -283,8 +287,24 @@ class PseudoForceAngleDataset(data.Dataset):
         seq_index, start = self.windows[index]
         sequence = self._sequences[seq_index]
         end = start + self.window_size
+        joint_contact = sequence.joint_contact[start:end]
+        if self.include_force_delta:
+            previous = torch.empty_like(joint_contact)
+            if start == 0:
+                previous[0].zero_()
+            else:
+                previous[0] = sequence.joint_contact[start - 1]
+            if self.window_size > 1:
+                previous[1:] = joint_contact[:-1]
+
+            delta = joint_contact - previous
+            # There is no preceding observation at a sequence boundary.
+            if start == 0:
+                delta[0].zero_()
+            joint_contact = torch.cat((joint_contact, delta), dim=-1)
+
         return {
-            self.sensor_output_key: sequence.joint_contact[start:end],
+            self.sensor_output_key: joint_contact,
             "finger_xyz": sequence.finger_xyz[start:end],
             "classification_id": self.window_labels[index],
         }
