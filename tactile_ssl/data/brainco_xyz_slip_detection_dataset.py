@@ -4,6 +4,8 @@ Each episode's ``data.json`` contains one or more inclusive slip intervals in
 ``slip_start_frame_index`` and ``slip_end_frame_index``. This adapter makes
 non-overlapping three-frame samples ``[t, t+1, t+2]`` and uses the final
 frame's label. At a final partial window, the final valid frame is repeated.
+Windows touching the configured transition margins immediately before slip
+onset or immediately after slip offset are discarded.
 """
 
 import json
@@ -35,8 +37,10 @@ def _as_index_list(value, field_name: str, episode_path: Path) -> list[int]:
         ) from exc
 
 
-def _read_slip_labels(episode_path: Path, num_frames: int) -> np.ndarray:
-    """Return a binary label for every frame from inclusive slip intervals."""
+def _read_slip_intervals(
+    episode_path: Path, num_frames: int
+) -> list[tuple[int, int]]:
+    """Read and validate inclusive slip intervals from one episode."""
     with (episode_path / "data.json").open("r") as file:
         metadata = json.load(file)
 
@@ -52,7 +56,7 @@ def _read_slip_labels(episode_path: Path, num_frames: int) -> np.ndarray:
             f"{len(starts)} starts, {len(ends)} ends"
         )
 
-    labels = np.zeros(num_frames, dtype=np.int64)
+    intervals = []
     for start, end in zip(starts, ends):
         if start < 0 or end < 0 or start >= num_frames or end >= num_frames:
             raise ValueError(
@@ -64,8 +68,38 @@ def _read_slip_labels(episode_path: Path, num_frames: int) -> np.ndarray:
                 f"Slip interval end precedes start: [{start}, {end}] in "
                 f"{episode_path / 'data.json'}"
             )
+        intervals.append((start, end))
+    return intervals
+
+
+def _labels_from_intervals(
+    intervals: list[tuple[int, int]], num_frames: int
+) -> np.ndarray:
+    labels = np.zeros(num_frames, dtype=np.int64)
+    for start, end in intervals:
         labels[start : end + 1] = 1
     return labels
+
+
+def _read_slip_labels(episode_path: Path, num_frames: int) -> np.ndarray:
+    """Return a binary label for every frame from inclusive slip intervals."""
+    return _labels_from_intervals(
+        _read_slip_intervals(episode_path, num_frames), num_frames
+    )
+
+
+def _excluded_transition_frames(
+    intervals: list[tuple[int, int]],
+    num_frames: int,
+    before_start: int,
+    after_end: int,
+) -> np.ndarray:
+    """Mask ambiguous non-slip frames around slip transitions."""
+    excluded = np.zeros(num_frames, dtype=bool)
+    for start, end in intervals:
+        excluded[max(0, start - before_start) : start] = True
+        excluded[end + 1 : min(num_frames, end + 1 + after_end)] = True
+    return excluded
 
 
 class BraincoXYZSlipDetectionDataset(data.Dataset):
@@ -96,6 +130,12 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
         input_window_stride = int(
             config.get("input_window_stride", input_window_frames)
         )
+        exclude_before_slip_start_frames = int(
+            config.get("exclude_before_slip_start_frames", 0)
+        )
+        exclude_after_slip_end_frames = int(
+            config.get("exclude_after_slip_end_frames", 0)
+        )
         if input_window_frames != 3:
             raise ValueError(
                 "BraincoXYZSlipDetectionDataset requires input_window_frames=3"
@@ -105,7 +145,13 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
                 "input_window_stride must be at least input_window_frames "
                 "to avoid overlap"
             )
+        if (
+            exclude_before_slip_start_frames < 0
+            or exclude_after_slip_end_frames < 0
+        ):
+            raise ValueError("Slip transition exclusion margins must be >= 0")
         max_values = torch.tensor([25000, 25000, 365, 500000], dtype=torch.float32)
+        num_excluded_windows = 0
 
         for class_name in class_names:
             class_dir = root / class_name
@@ -126,7 +172,16 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
                         data_path=str(episode_path),
                         brainco_urdf_path=brainco_urdf_path,
                     )
-                    labels = _read_slip_labels(episode_path, episode.num_frames)
+                    intervals = _read_slip_intervals(
+                        episode_path, episode.num_frames
+                    )
+                    labels = _labels_from_intervals(intervals, episode.num_frames)
+                    excluded_frames = _excluded_transition_frames(
+                        intervals,
+                        episode.num_frames,
+                        before_start=exclude_before_slip_start_frames,
+                        after_end=exclude_after_slip_end_frames,
+                    )
                 except Exception as exc:
                     log.warning(f"Skipping {episode_path}: {exc}")
                     continue
@@ -137,20 +192,27 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
                     valid = (tactile >= 0) & (baseline[np.newaxis] >= 0)
                     tactile -= np.where(valid, baseline[np.newaxis], 0)
 
-                window_starts = list(
+                candidate_starts = list(
                     range(0, episode.num_frames, input_window_stride)
                 )
-                self.episode_data.append({
-                    "path": str(episode_path),
-                    "window_starts": window_starts,
-                })
-
-                for window_start in window_starts:
+                window_specs = []
+                for window_start in candidate_starts:
                     frame_indices = np.clip(
                         np.arange(window_start, window_start + input_window_frames),
                         0,
                         episode.num_frames - 1,
                     )
+                    if excluded_frames[frame_indices].any():
+                        num_excluded_windows += 1
+                        continue
+                    window_specs.append((window_start, frame_indices))
+
+                self.episode_data.append({
+                    "path": str(episode_path),
+                    "window_starts": [start for start, _ in window_specs],
+                })
+
+                for window_start, frame_indices in window_specs:
                     label_frame = min(
                         window_start + input_window_frames - 1,
                         episode.num_frames - 1,
@@ -174,7 +236,9 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
         num_slip = sum(sample["label"].item() for sample in self.windows)
         log.info(
             f"BraincoXYZSlipDetectionDataset: {len(self.episode_data)} episodes, "
-            f"{len(self.windows)} samples (slip={num_slip}, non-slip={len(self.windows) - num_slip})"
+            f"{len(self.windows)} samples (slip={num_slip}, "
+            f"non-slip={len(self.windows) - num_slip}, "
+            f"excluded_transition_windows={num_excluded_windows})"
         )
 
     def __len__(self):

@@ -88,7 +88,7 @@ run_experiment() {
     run_name="xyz_slip_detection_objectwise_${exp_name}_${model}_seed_${seed}_val_${val_object}"
     cmd=(python train_task_brainco_angle.py "+experiment=${experiment}"
         "seed=${seed}" "data.dataset.config.classes=${train_classes}"
-        "data.val_dataset={_target_:tactile_ssl.data.brainco_xyz_slip_detection_dataset.BraincoXYZSlipDetectionDataset,config:{window_time:\${data.window_time},window_overlap:\${data.window_overlap},interpolating_freq:\${data.interpolating_freq},subtract_baseline:true,align_xyz_to_npz:true,input_window_frames:3,input_window_stride:3,classes:${val_classes}},data_path:\${data.dataset.data_path},brainco_urdf_path:\${data.dataset.brainco_urdf_path}}"
+        "data.val_dataset={_target_:tactile_ssl.data.brainco_xyz_slip_detection_dataset.BraincoXYZSlipDetectionDataset,config:{window_time:\${data.window_time},window_overlap:\${data.window_overlap},interpolating_freq:\${data.interpolating_freq},subtract_baseline:true,align_xyz_to_npz:true,input_window_frames:\${data.dataset.config.input_window_frames},input_window_stride:\${data.dataset.config.input_window_stride},exclude_before_slip_start_frames:\${data.dataset.config.exclude_before_slip_start_frames},exclude_after_slip_end_frames:\${data.dataset.config.exclude_after_slip_end_frames},classes:${val_classes}},data_path:\${data.dataset.data_path},brainco_urdf_path:\${data.dataset.brainco_urdf_path}}"
         "experiment_name=${run_name}" "wandb.group=xyz_slip_detection_objectwise_${exp_name}_${model}"
         "wandb.tags=[brainco,xyz,dinov2,slip_detection,objectwise,ood,${model},seed_${seed},val_${val_object}]"
         "all_split=false" "${EXTRA_OVERRIDES[@]}")

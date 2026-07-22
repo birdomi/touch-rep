@@ -1,8 +1,8 @@
 train_dataloader:
-  batch_size: 64
-  num_workers: 4
+  batch_size: 128
+  num_workers: 8
   shuffle: true
-  drop_last: true
+  drop_last: false
   pin_memory: true
   persistent_workers: true
 
@@ -37,6 +37,10 @@ dataset:
     align_xyz_to_npz: true
     input_window_frames: 3
     input_window_stride: 3
+    # Drop any window touching the ambiguous transition region immediately
+    # before slip onset or immediately after slip offset.
+    exclude_before_slip_start_frames: 10
+    exclude_after_slip_end_frames: 10
     # Object folders to include. Keep this explicit so ID and leave-one-object-out
     # experiments always use the same three-object universe.
     classes: [slip_doll, slip_evacase, slip_pot]

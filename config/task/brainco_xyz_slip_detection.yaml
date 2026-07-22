@@ -20,7 +20,7 @@ wandb:
   tags: ["brainco", "xyz", "slip_detection"]
 
 trainer:
-  max_epochs: 50
+  max_epochs: 100
   validation_frequency: 5
   sanity_validate: true
   save_checkpoint_dir: ${paths.output_dir}/checkpoints
@@ -68,6 +68,7 @@ task:
   encoder_warmup_fine_tune_sensor_epochs: 0
   encoder_warmup_fine_tune_sensor_shallow_blocks: ~
   log_confusion_matrix_image: false
+  best_val_metric: f1
 
   optim_cfg:
     _partial_: true

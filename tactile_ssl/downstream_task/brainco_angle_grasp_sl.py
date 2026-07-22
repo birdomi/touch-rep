@@ -34,18 +34,39 @@ class BraincoAngleGraspSLModule(BraincoGraspDetectionSLModule):
             window_tokens : (B, W, embed_dim)
         """
         B, W, N, C = joint_contact.shape
+        encoder_sequence_length = int(
+            getattr(self.model_encoder, "sequence_length", 1)
+        )
 
-        xs  = joint_contact.view(B * W, 1, N, C)                  # (B*W, T=1, 10, 4)
-        pos = position_input.view(B * W, 1, position_input.shape[2],
-                                  position_input.shape[3])
+        if encoder_sequence_length == 1:
+            # Frame-wise encoder: independently encode each downstream frame,
+            # then let the task probe pool over the resulting window tokens.
+            xs = joint_contact.view(B * W, 1, N, C)
+            pos = position_input.view(
+                B * W, 1, position_input.shape[2], position_input.shape[3]
+            )
+            output_batch_size, output_window_size = B, W
+        elif W == encoder_sequence_length:
+            # Temporal pretraining encoder: preserve all input frames so its
+            # Conv1d temporal patch (e.g. T=3, chunk=3) is applied exactly as
+            # it was during pretraining. One temporal patch becomes one task
+            # token per sample.
+            xs, pos = joint_contact, position_input
+            output_batch_size, output_window_size = B, 1
+        else:
+            raise ValueError(
+                "Downstream window length must match the temporal encoder "
+                f"sequence_length: got W={W}, "
+                f"encoder sequence_length={encoder_sequence_length}"
+            )
 
         ctx = torch.no_grad() if not self.train_encoder else torch.enable_grad()
         with ctx:
             out      = self.model_encoder.forward_features(xs, pos)
             x_tokens = out["x_tokens"]                             # (B*W, reg+N, D)
 
-        pooled        = self.pooler(x_tokens)                      # (B*W, 1, D)
-        window_tokens = pooled.view(B, W, -1)                      # (B, W, D)
+        pooled = self.pooler(x_tokens)
+        window_tokens = pooled.view(output_batch_size, output_window_size, -1)
 
         if mask is not None:
             window_tokens = window_tokens * mask.unsqueeze(-1).float()

@@ -270,6 +270,7 @@ class BraincoGraspDetectionSLModule(SLModule):
         encoder_warmup_fine_tune_sensor_epochs: int = 0,
         encoder_warmup_fine_tune_sensor_shallow_blocks: Optional[int] = None,
         log_confusion_matrix_image: bool = True,
+        best_val_metric: str = "accuracy",
     ):
         super().__init__(
             model_encoder=model_encoder,
@@ -288,6 +289,12 @@ class BraincoGraspDetectionSLModule(SLModule):
         self.encoder_warmup_fine_tune_sensor_epochs = int(encoder_warmup_fine_tune_sensor_epochs)
         self.encoder_warmup_fine_tune_sensor_shallow_blocks = encoder_warmup_fine_tune_sensor_shallow_blocks
         self.log_confusion_matrix_image = bool(log_confusion_matrix_image)
+        if best_val_metric not in {"accuracy", "f1"}:
+            raise ValueError(
+                "best_val_metric must be either 'accuracy' or 'f1', "
+                f"got {best_val_metric!r}"
+            )
+        self.best_val_metric = best_val_metric
         self._encoder_warmup_mode = None
         self._encoder_warmup_epoch_idx = 0
         if self.encoder_warmup_fine_tune_sensor_epochs < 0:
@@ -321,7 +328,7 @@ class BraincoGraspDetectionSLModule(SLModule):
         self.val_failed_samples = []   # list of {sensor, label, pred}
         self.last_val_metrics = {}
         self.best_val_metrics = {}
-        self._best_state_dict = None   # saved when val accuracy peaks
+        self._best_state_dict = None   # saved when the selected validation metric peaks
         self._in_test = False          # flag: running test eval loop
         self.last_test_metrics = {}
         
@@ -554,14 +561,18 @@ class BraincoGraspDetectionSLModule(SLModule):
             plt.close("all")
             confusion_matrix_image = Image.open(img_buf)
 
-        self.last_val_metrics = {"accuracy": accuracy, "f1": f1}
-        if accuracy > self.best_val_metrics.get("accuracy", -1.0):
+        self.last_val_metrics = {"accuracy": float(accuracy), "f1": float(f1)}
+        selected_metric = self.last_val_metrics[self.best_val_metric]
+        if selected_metric > self.best_val_metrics.get(self.best_val_metric, -1.0):
             self.best_val_metrics = {"accuracy": float(accuracy), "f1": float(f1)}
             import copy
             self._best_state_dict = copy.deepcopy(
                 {k: v.cpu() for k, v in self.state_dict().items()}
             )
-            log.info(f"New best val accuracy: {accuracy:.4f} — weights saved.")
+            log.info(
+                f"New best val {self.best_val_metric}: {selected_metric:.4f} "
+                "— weights saved."
+            )
 
         if trainer_instance is not None:
             val_log = {
