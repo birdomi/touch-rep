@@ -1,0 +1,24 @@
+# @package _global_
+
+# Delta-input scratch model with a causal temporal RoPE Transformer probe.
+# The framewise encoder produces three tokens; the probe applies causal
+# self-attention and classifies from the final token.
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/dinov2_all_rope_delta_scratch
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_all_rope_delta_scratch_temporal_rope_probe
+
+wandb:
+  group: all_pseudo_force_rope_delta_scratch_temporal_rope_probe
+  tags: ["brainco", "xyz", "slip_detection", "scratch", "rope", "force_delta", "8d", "causal_temporal_rope_probe"]
+
+task:
+  model_task:
+    _target_: tactile_ssl.downstream_task.BraincoGraspRoPEProbe
+    embed_dim: 192
+    num_heads: 3
+    mlp_ratio: 4.0
+    depth: 1
+    max_seq_len: 3
+    num_classes: 2

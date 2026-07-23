@@ -1,0 +1,31 @@
+# @package _global_
+
+defaults:
+  - override /data: oakinkv2_arctic_taco_hot3d
+  - override /algorithm: spatiotemporal_tactile_jepa
+  - _self_
+
+model_size: tiny
+experiment_name: spatiotemporal_tactile_jepa_all_${model_size}_rope
+ckpt_path: ./
+
+wandb:
+  entity: ryk9012-gwangju-institute-of-science-and-technology
+  project: tactile_jepa
+  group: spatiotemporal_tactile_jepa_all_${model_size}_rope
+  tags: ["all", "pseudo_force", "spatial_jepa", "temporal_jepa", "non_overlap", "finger_block", "rope"]
+
+trainer:
+  max_epochs: 100
+  validation_frequency: 50
+
+data:
+  sensor: all_pseudo_force
+  oakinkv2_data_root: ./pretraining_dataset/pseudo_force_dataset/oakinkv2
+  arctic_data_root: ./pretraining_dataset/pseudo_force_dataset/arctic
+  taco_data_root: ./pretraining_dataset/pseudo_force_dataset/taco
+  hot3d_data_root: ./pretraining_dataset/pseudo_force_dataset/hot3d
+  window_size: 6
+  window_stride: 1
+  train_val_split: 1.0
+

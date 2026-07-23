@@ -1,0 +1,67 @@
+_target_: tactile_ssl.algorithm.SpatiotemporalTactileJEPAModule
+
+sensor_input_key: joint_force
+pos_input_key: finger_xyz
+context_window_size: 3
+
+# Finger identities are sampled independently for the two modalities.
+# 0.4 masks four tactile fingers (4 tokens each) and four XYZ fingers
+# (1 token each). The sampled finger sets may overlap only by chance.
+tactile_mask_ratio: 0.4
+xyz_mask_ratio: 0.4
+
+spatial_tactile_loss_weight: 1.0
+spatial_xyz_loss_weight: 1.0
+temporal_tactile_loss_weight: 1.0
+loss_type: smooth_l1
+moving_average_decay: [0.994, 1.0]
+
+encoder:
+  _target_: tactile_ssl.model.angle_tiny
+  in_dim: 42
+  in_chans: 4
+  pos_in_dim: 10
+  pos_in_chans: 3
+  sequence_length: 3
+  time_chunk_size: 3
+  num_register_tokens: 0
+  pos_embed_fn: rope
+  rope_hand_offset: 100
+  with_masktoken: false
+  pre_fusion_depth: 0
+  drop_path_rate: 0.3
+  drop_path_uniform: true
+  normalization: ${data.normalization}
+  causal: false
+
+predictor:
+  _partial_: true
+  _target_: tactile_ssl.model.JEPATokenPredictor
+  predictor_dim: 192
+  depth: 2
+  num_heads: 3
+  mlp_ratio: 4.0
+  dropout: 0.0
+
+optim_cfg:
+  _partial_: true
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  weight_decay: 0.005
+
+lr_scheduler_cfg:
+  _partial_: true
+  _target_: tactile_ssl.model.custom_scheduler.WarmupCosineScheduler
+  steps_per_epoch: ???
+  T_max: ???
+  final_lr: 1.0e-6
+  start_lr: 1.0e-5
+  warmup_epochs: 1
+
+wd_scheduler_cfg:
+  _partial_: true
+  _target_: tactile_ssl.model.custom_scheduler.CosineWDSchedule
+  final_weight_decay: 0.04
+  ref_weight_decay: 0.004
+  T_max: ???
+

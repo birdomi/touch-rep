@@ -1,0 +1,26 @@
+# @package _global_
+
+# Framewise pretrained encoder followed by a causal temporal RoPE Transformer
+# over the 30-frame grasp-prediction window. Classification uses the final
+# temporal token.
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/dinov2_all_rope
+  - _self_
+
+experiment_name: brainco_xyz_grasp_prediction_all_rope_temporal_rope_probe
+
+wandb:
+  group: all_pseudo_force_rope_pretrained_temporal_rope_probe
+  tags: ["brainco", "xyz", "grasp_prediction", "all", "pretrained", "rope", "causal_temporal_rope_probe"]
+
+task:
+  # Freeze the pretrained spatial encoder and train only the temporal probe.
+  train_encoder: false
+  model_task:
+    _target_: tactile_ssl.downstream_task.BraincoGraspRoPEProbe
+    embed_dim: 192
+    num_heads: 3
+    mlp_ratio: 4.0
+    depth: 1
+    max_seq_len: 30
+    num_classes: 2

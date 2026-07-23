@@ -1,0 +1,26 @@
+# @package _global_
+
+# Scratch slip-detection baseline using the delta pretraining architecture:
+# current tactile force (4 channels) + previous-frame delta (4 channels).
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/dinov2_all_rope_scratch
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_all_rope_delta_scratch
+
+wandb:
+  group: all_pseudo_force_rope_delta_scratch
+  tags: ["brainco", "xyz", "slip_detection", "scratch", "rope", "force_delta", "8d"]
+
+data:
+  dataset:
+    config:
+      include_force_delta: true
+
+task:
+  checkpoint_encoder: null
+  train_encoder: true
+  model_encoder:
+    in_chans: 8
+    sequence_length: 1
+    time_chunk_size: 1

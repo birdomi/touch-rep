@@ -1,0 +1,27 @@
+# @package _global_
+
+# Frozen framewise pretrained encoder followed by a causal temporal RoPE
+# Transformer over the three-frame slip-detection window. Classification uses
+# the final temporal token, matching the dataset's final-frame label.
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/dinov2_all_rope
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_all_rope_temporal_rope_probe
+
+wandb:
+  group: all_pseudo_force_rope_pretrained_temporal_rope_probe
+  tags: ["brainco", "xyz", "slip_detection", "pretrained", "rope", "causal_temporal_rope_probe"]
+
+task:
+  # Keep the pretrained spatial encoder fixed; train the downstream pooler and
+  # temporal classification probe only.
+  train_encoder: false
+  model_task:
+    _target_: tactile_ssl.downstream_task.BraincoGraspRoPEProbe
+    embed_dim: 192
+    num_heads: 3
+    mlp_ratio: 4.0
+    depth: 1
+    max_seq_len: 3
+    num_classes: 2

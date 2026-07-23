@@ -1,0 +1,18 @@
+# @package _global_
+
+# Scratch counterpart of dinov2_all_rope_temporal_rope_probe.yaml. The
+# encoder starts from random weights, so it is trained jointly with the causal
+# temporal RoPE probe instead of being frozen.
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/dinov2_all_rope_temporal_rope_probe
+  - _self_
+
+experiment_name: brainco_xyz_grasp_prediction_all_rope_temporal_rope_probe_scratch
+
+wandb:
+  group: all_pseudo_force_rope_scratch_temporal_rope_probe
+  tags: ["brainco", "xyz", "grasp_prediction", "all", "scratch", "rope", "causal_temporal_rope_probe"]
+
+task:
+  checkpoint_encoder: null
+  train_encoder: true

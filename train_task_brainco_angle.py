@@ -42,6 +42,24 @@ OmegaConf.register_new_resolver("int_divide",          lambda a, b: a // b)
 OmegaConf.register_new_resolver("capitalize",          lambda s: s.title())
 
 
+def _compute_signal_stats(
+    all_contact: torch.Tensor,
+    signed_channels_from: int | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute per-channel stats while retaining signed delta observations."""
+    num_channels = all_contact.shape[-1]
+    signal_mean = torch.zeros(num_channels)
+    signal_std = torch.ones(num_channels)
+    for channel in range(num_channels):
+        values = all_contact[..., channel].reshape(-1).float()
+        if signed_channels_from is None or channel < signed_channels_from:
+            values = values[values >= 0]
+        if values.numel() > 0:
+            signal_mean[channel] = values.mean()
+            signal_std[channel] = values.std().clamp(min=1e-6)
+    return signal_mean, signal_std
+
+
 # ── wandb ──────────────────────────────────────────────────────────────────────
 
 def init_wandb(cfg: DictConfig):
@@ -79,14 +97,12 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
 
         # ── Normalization: compute signal stats from train joint_contact ──────
         all_contact = torch.stack([dataset.windows[i]["joint_contact"] for i in train_indices])
-        NUM_CHANS = all_contact.shape[-1]
-        signal_mean = torch.zeros(NUM_CHANS)
-        signal_std  = torch.ones(NUM_CHANS)
-        for c in range(NUM_CHANS):
-            valid = all_contact[..., c][all_contact[..., c] >= 0].float()
-            if valid.numel() > 0:
-                signal_mean[c] = valid.mean()
-                signal_std[c]  = valid.std().clamp(min=1e-6)
+        signed_channels_from = (
+            4 if getattr(dataset, "include_force_delta", False) else None
+        )
+        signal_mean, signal_std = _compute_signal_stats(
+            all_contact, signed_channels_from=signed_channels_from
+        )
 
         dataset.computed_signal_mean = signal_mean
         dataset.computed_signal_std  = signal_std
@@ -195,14 +211,12 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
     all_contact = torch.stack([dataset.windows[i]["joint_contact"] for i in train_indices])
     # all_contact: (N_train, W, 10, 4)
 
-    NUM_CHANS = all_contact.shape[-1]
-    signal_mean = torch.zeros(NUM_CHANS)
-    signal_std  = torch.ones(NUM_CHANS)
-    for c in range(NUM_CHANS):
-        valid = all_contact[..., c][all_contact[..., c] >= 0].float()
-        if valid.numel() > 0:
-            signal_mean[c] = valid.mean()
-            signal_std[c]  = valid.std().clamp(min=1e-6)
+    signed_channels_from = (
+        4 if getattr(dataset, "include_force_delta", False) else None
+    )
+    signal_mean, signal_std = _compute_signal_stats(
+        all_contact, signed_channels_from=signed_channels_from
+    )
 
     lines.append(f"[NormStats] signal_mean: {signal_mean.tolist()}")
     lines.append(f"[NormStats] signal_std:  {signal_std.tolist()}")
@@ -306,14 +320,7 @@ def get_dataloader_brainco_angle_oc(cfg: DictConfig):
 
     # ── Normalization stats from training contact data ────────────────────────
     all_contact = torch.stack([dataset.windows[i]["joint_contact"] for i in train_indices])
-    NUM_CHANS   = all_contact.shape[-1]
-    signal_mean = torch.zeros(NUM_CHANS)
-    signal_std  = torch.ones(NUM_CHANS)
-    for c in range(NUM_CHANS):
-        valid = all_contact[..., c][all_contact[..., c] >= 0].float()
-        if valid.numel() > 0:
-            signal_mean[c] = valid.mean()
-            signal_std[c]  = valid.std().clamp(min=1e-6)
+    signal_mean, signal_std = _compute_signal_stats(all_contact)
 
     dataset.computed_signal_mean = signal_mean
     dataset.computed_signal_std  = signal_std
