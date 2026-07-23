@@ -12,7 +12,7 @@ ckpt_path: ./
 resume_id: ~
 
 fold: 0
-num_folds: 5
+num_folds: 4
 
 wandb:
   entity: ryk9012-gwangju-institute-of-science-and-technology

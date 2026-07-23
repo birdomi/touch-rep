@@ -13,6 +13,7 @@ pretraining_dataset/*
 vis/*
 *.txt
 *.csv
+checkpoints/*
 
 # C extensions
 *.so
