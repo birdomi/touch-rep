@@ -126,6 +126,7 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
 
         subtract_baseline = bool(config.get("subtract_baseline", False))
         align_xyz_to_npz = bool(config.get("align_xyz_to_npz", True))
+        self.include_force_delta = bool(config.get("include_force_delta", False))
         input_window_frames = int(config.get("input_window_frames", 3))
         input_window_stride = int(
             config.get("input_window_stride", input_window_frames)
@@ -187,10 +188,23 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
                     continue
 
                 tactile = episode.tactile_array.copy()
+                tactile_valid = tactile >= 0
                 if subtract_baseline:
                     baseline = tactile[0].copy()
-                    valid = (tactile >= 0) & (baseline[np.newaxis] >= 0)
+                    valid = tactile_valid & (baseline[np.newaxis] >= 0)
                     tactile -= np.where(valid, baseline[np.newaxis], 0)
+
+                tactile = torch.from_numpy(tactile)
+                tactile = tactile / max_values.view(1, 1, -1)
+                if self.include_force_delta:
+                    tactile_delta = torch.zeros_like(tactile)
+                    valid_pairs = torch.from_numpy(
+                        tactile_valid[1:] & tactile_valid[:-1]
+                    )
+                    frame_delta = tactile[1:] - tactile[:-1]
+                    tactile_delta[1:] = torch.where(
+                        valid_pairs, frame_delta, torch.zeros_like(frame_delta)
+                    )
 
                 candidate_starts = list(
                     range(0, episode.num_frames, input_window_stride)
@@ -217,8 +231,11 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
                         window_start + input_window_frames - 1,
                         episode.num_frames - 1,
                     )
-                    joint_contact = torch.from_numpy(tactile[frame_indices].copy())
-                    joint_contact = joint_contact / max_values.view(1, 1, -1)
+                    joint_contact = tactile[frame_indices]
+                    if self.include_force_delta:
+                        joint_contact = torch.cat(
+                            (joint_contact, tactile_delta[frame_indices]), dim=-1
+                        )
                     finger_xyz = torch.from_numpy(
                         episode.fingertip_rel[frame_indices].copy()
                     )
@@ -238,7 +255,8 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
             f"BraincoXYZSlipDetectionDataset: {len(self.episode_data)} episodes, "
             f"{len(self.windows)} samples (slip={num_slip}, "
             f"non-slip={len(self.windows) - num_slip}, "
-            f"excluded_transition_windows={num_excluded_windows})"
+            f"excluded_transition_windows={num_excluded_windows}, "
+            f"force_delta={self.include_force_delta})"
         )
 
     def __len__(self):
