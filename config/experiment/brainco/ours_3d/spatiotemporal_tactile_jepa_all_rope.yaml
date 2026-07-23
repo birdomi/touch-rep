@@ -28,4 +28,3 @@ data:
   window_size: 6
   window_stride: 1
   train_val_split: 1.0
-

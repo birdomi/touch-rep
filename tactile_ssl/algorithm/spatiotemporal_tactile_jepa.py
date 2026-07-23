@@ -8,8 +8,10 @@ The shared token layout is always
 
     [10 fingertip XYZ tokens][42 tactile/force tokens].
 
-The student sees a masked current window. Tactile and XYZ finger-block masks
-are sampled independently. The EMA teacher sees both windows without masks.
+The spatial student sees multiple masked views of the current window; tactile
+and XYZ finger-block masks are sampled independently for every view. The
+temporal student sees the full current window once. The EMA teacher sees both
+the current and future windows without masks.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from functools import partial
 from typing import Dict, Optional, Sequence, Tuple, Union
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -63,8 +66,9 @@ class SpatiotemporalTactileJEPAModule(Module, nn.Module):
         sensor_input_key: str = "joint_force",
         pos_input_key: str = "finger_xyz",
         context_window_size: int = 3,
-        tactile_mask_ratio: float = 0.4,
-        xyz_mask_ratio: float = 0.4,
+        num_spatial_mask_views: int = 8,
+        spatial_mask_ratio_min: float = 0.1,
+        spatial_mask_ratio_max: float = 0.6,
         spatial_tactile_loss_weight: float = 1.0,
         spatial_xyz_loss_weight: float = 1.0,
         temporal_tactile_loss_weight: float = 1.0,
@@ -94,12 +98,18 @@ class SpatiotemporalTactileJEPAModule(Module, nn.Module):
             raise ValueError(
                 f"Expected {NUM_XYZ_TOKENS} XYZ tokens, got {encoder.pos_in_dim}"
             )
+        if num_spatial_mask_views <= 0:
+            raise ValueError("num_spatial_mask_views must be positive")
         for name, ratio in (
-            ("tactile_mask_ratio", tactile_mask_ratio),
-            ("xyz_mask_ratio", xyz_mask_ratio),
+            ("spatial_mask_ratio_min", spatial_mask_ratio_min),
+            ("spatial_mask_ratio_max", spatial_mask_ratio_max),
         ):
             if not 0.0 < ratio < 1.0:
                 raise ValueError(f"{name} must be between 0 and 1, got {ratio}")
+        if spatial_mask_ratio_min > spatial_mask_ratio_max:
+            raise ValueError(
+                "spatial_mask_ratio_min must not exceed spatial_mask_ratio_max"
+            )
         if loss_type not in {"smooth_l1", "cosine"}:
             raise ValueError("loss_type must be 'smooth_l1' or 'cosine'")
 
@@ -107,8 +117,19 @@ class SpatiotemporalTactileJEPAModule(Module, nn.Module):
         self.pos_input_key = pos_input_key
         self.context_window_size = int(context_window_size)
         self.required_window_size = 2 * self.context_window_size
-        self.tactile_mask_ratio = float(tactile_mask_ratio)
-        self.xyz_mask_ratio = float(xyz_mask_ratio)
+        self.num_spatial_mask_views = int(num_spatial_mask_views)
+        self.spatial_mask_ratio_min = float(spatial_mask_ratio_min)
+        self.spatial_mask_ratio_max = float(spatial_mask_ratio_max)
+        if self.num_spatial_mask_views == 1:
+            self.spatial_mask_ratios = (self.spatial_mask_ratio_min,)
+        else:
+            ratio_step = (
+                self.spatial_mask_ratio_max - self.spatial_mask_ratio_min
+            ) / (self.num_spatial_mask_views - 1)
+            self.spatial_mask_ratios = tuple(
+                self.spatial_mask_ratio_min + view_idx * ratio_step
+                for view_idx in range(self.num_spatial_mask_views)
+            )
         self.spatial_tactile_loss_weight = float(spatial_tactile_loss_weight)
         self.spatial_xyz_loss_weight = float(spatial_xyz_loss_weight)
         self.temporal_tactile_loss_weight = float(temporal_tactile_loss_weight)
@@ -154,6 +175,7 @@ class SpatiotemporalTactileJEPAModule(Module, nn.Module):
             torch.tensor(TACTILE_FINGER_GROUPS, dtype=torch.long),
             persistent=False,
         )
+        self._epoch_latent_stats: Dict[str, Dict[str, torch.Tensor]] = {}
 
     def train(self, mode: bool = True):
         result = super().train(mode)
@@ -166,6 +188,51 @@ class SpatiotemporalTactileJEPAModule(Module, nn.Module):
     def _gather_tokens(tokens: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
         gather_indices = indices.unsqueeze(-1).expand(-1, -1, tokens.shape[-1])
         return torch.gather(tokens, dim=1, index=gather_indices)
+
+    def _accumulate_batch_direction_stats(
+        self,
+        name: str,
+        latents: torch.Tensor,
+        token_indices: torch.Tensor,
+        num_token_positions: int,
+    ) -> None:
+        """Accumulate per-position moments over the epoch sample axis."""
+        values = latents.detach().float()
+        indices = token_indices.detach().long()
+        if values.shape[:2] != indices.shape:
+            raise ValueError(
+                f"Latent/index shape mismatch for {name}: "
+                f"{tuple(values.shape[:2])} vs {tuple(indices.shape)}"
+            )
+
+        stats = self._epoch_latent_stats.get(name)
+        if stats is None:
+            stats = {
+                "sum": values.new_zeros(num_token_positions, values.shape[-1]),
+                "squared_sum": values.new_zeros(
+                    num_token_positions, values.shape[-1]
+                ),
+                "count": values.new_zeros(num_token_positions),
+            }
+            self._epoch_latent_stats[name] = stats
+
+        flat_indices = indices.reshape(-1)
+        flat_values = values.reshape(-1, values.shape[-1])
+        stats["sum"].index_add_(0, flat_indices, flat_values)
+        stats["squared_sum"].index_add_(0, flat_indices, flat_values.square())
+        stats["count"].index_add_(
+            0,
+            flat_indices,
+            torch.ones(flat_indices.shape[0], device=values.device),
+        )
+
+    @staticmethod
+    def _full_token_indices(
+        batch_size: int, num_tokens: int, device: torch.device
+    ) -> torch.Tensor:
+        return torch.arange(num_tokens, device=device, dtype=torch.long).expand(
+            batch_size, -1
+        )
 
     @staticmethod
     def _visible_complement(masked: torch.Tensor, num_tokens: int) -> torch.Tensor:
@@ -184,11 +251,11 @@ class SpatiotemporalTactileJEPAModule(Module, nn.Module):
         return max(1, min(NUM_FINGERS - 1, int(round(mask_ratio * NUM_FINGERS))))
 
     def _sample_finger_masks(
-        self, batch_size: int, device: torch.device
+        self, batch_size: int, device: torch.device, mask_ratio: float
     ) -> Dict[str, torch.Tensor]:
         """Sample independent tactile and XYZ finger-block masks."""
-        num_tactile_fingers = self._num_masked_fingers(self.tactile_mask_ratio)
-        num_xyz_fingers = self._num_masked_fingers(self.xyz_mask_ratio)
+        num_tactile_fingers = self._num_masked_fingers(mask_ratio)
+        num_xyz_fingers = self._num_masked_fingers(mask_ratio)
 
         tactile_fingers = torch.rand(batch_size, NUM_FINGERS, device=device).topk(
             num_tactile_fingers, dim=-1, largest=False
@@ -241,47 +308,6 @@ class SpatiotemporalTactileJEPAModule(Module, nn.Module):
             sensor, pos
         )
         batch_size = sensor.shape[0]
-        masks = self._sample_finger_masks(batch_size, sensor.device)
-
-        # A leading singleton mask dimension creates one masked view and keeps
-        # the effective student batch size equal to B.
-        student_dict = self.student_encoder.forward_features(
-            current_sensor,
-            current_pos,
-            masks=masks["tactile_visible"].unsqueeze(0),
-            mask_type="tubelet",
-            pos_masks=masks["xyz_visible"].unsqueeze(0),
-        )
-        student_tokens = student_dict["x_norm_patchtokens"]
-
-        # AngleTransformer emits XYZ first and tactile second.
-        context_indices = torch.cat(
-            (
-                masks["xyz_visible"],
-                masks["tactile_visible"] + NUM_XYZ_TOKENS,
-            ),
-            dim=1,
-        )
-        spatial_target_indices = torch.cat(
-            (
-                masks["xyz_masked"],
-                masks["tactile_masked"] + NUM_XYZ_TOKENS,
-            ),
-            dim=1,
-        )
-        spatial_predictions = self.spatial_predictor(
-            student_tokens, context_indices, spatial_target_indices
-        )
-
-        future_tactile_indices = torch.arange(
-            NUM_XYZ_TOKENS,
-            NUM_TOKEN_POSITIONS,
-            device=sensor.device,
-            dtype=torch.long,
-        ).expand(batch_size, -1)
-        temporal_predictions = self.temporal_predictor(
-            student_tokens, context_indices, future_tactile_indices
-        )
 
         with torch.no_grad():
             # Encode both unmasked teacher windows in one call.
@@ -293,29 +319,154 @@ class SpatiotemporalTactileJEPAModule(Module, nn.Module):
                 "x_norm_patchtokens"
             ].chunk(2, dim=0)
 
-        num_xyz_targets = masks["xyz_masked"].shape[1]
-        spatial_xyz_predictions = spatial_predictions[:, :num_xyz_targets]
-        spatial_tactile_predictions = spatial_predictions[:, num_xyz_targets:]
-
         teacher_current_xyz = teacher_current[:, :NUM_XYZ_TOKENS]
         teacher_current_tactile = teacher_current[:, NUM_XYZ_TOKENS:]
-        spatial_xyz_targets = self._gather_tokens(
-            teacher_current_xyz, masks["xyz_masked"]
-        )
-        spatial_tactile_targets = self._gather_tokens(
-            teacher_current_tactile, masks["tactile_masked"]
-        )
         temporal_tactile_targets = teacher_future[:, NUM_XYZ_TOKENS:]
 
-        spatial_xyz_loss = self._latent_loss(
-            spatial_xyz_predictions, spatial_xyz_targets
+        # Temporal JEPA uses one full, unmasked current-window representation.
+        temporal_student_dict = self.student_encoder.forward_features(
+            current_sensor, current_pos
         )
-        spatial_tactile_loss = self._latent_loss(
-            spatial_tactile_predictions, spatial_tactile_targets
+        temporal_student_tokens = temporal_student_dict["x_norm_patchtokens"]
+        full_token_indices = self._full_token_indices(
+            batch_size, NUM_TOKEN_POSITIONS, sensor.device
+        )
+        future_tactile_indices = torch.arange(
+            NUM_XYZ_TOKENS,
+            NUM_TOKEN_POSITIONS,
+            device=sensor.device,
+            dtype=torch.long,
+        ).expand(batch_size, -1)
+        temporal_predictions = self.temporal_predictor(
+            temporal_student_tokens, full_token_indices, future_tactile_indices
         )
         temporal_tactile_loss = self._latent_loss(
             temporal_predictions, temporal_tactile_targets
         )
+
+        # Spatial mask views span the configured ratio range. Views with
+        # the same number of visible tokens are processed together as an
+        # effective view-major batch to reduce encoder call overhead.
+        grouped_masks = {}
+        for mask_ratio in self.spatial_mask_ratios:
+            view_masks = self._sample_finger_masks(
+                batch_size, sensor.device, mask_ratio
+            )
+            group_key = (
+                view_masks["tactile_masked"].shape[1],
+                view_masks["xyz_masked"].shape[1],
+            )
+            grouped_masks.setdefault(group_key, []).append(view_masks)
+
+        spatial_xyz_loss_sum = sensor.new_zeros(())
+        spatial_tactile_loss_sum = sensor.new_zeros(())
+        for view_group in grouped_masks.values():
+            num_group_views = len(view_group)
+            tactile_visible = torch.stack(
+                [view["tactile_visible"] for view in view_group], dim=0
+            )
+            tactile_masked = torch.stack(
+                [view["tactile_masked"] for view in view_group], dim=0
+            )
+            xyz_visible = torch.stack(
+                [view["xyz_visible"] for view in view_group], dim=0
+            )
+            xyz_masked = torch.stack(
+                [view["xyz_masked"] for view in view_group], dim=0
+            )
+
+            spatial_student_dict = self.student_encoder.forward_features(
+                current_sensor,
+                current_pos,
+                masks=tactile_visible,
+                mask_type="tubelet",
+                pos_masks=xyz_visible,
+            )
+            spatial_student_tokens = spatial_student_dict["x_norm_patchtokens"]
+
+            tactile_visible_flat = tactile_visible.flatten(0, 1)
+            tactile_masked_flat = tactile_masked.flatten(0, 1)
+            xyz_visible_flat = xyz_visible.flatten(0, 1)
+            xyz_masked_flat = xyz_masked.flatten(0, 1)
+            context_indices = torch.cat(
+                (
+                    xyz_visible_flat,
+                    tactile_visible_flat + NUM_XYZ_TOKENS,
+                ),
+                dim=1,
+            )
+            spatial_target_indices = torch.cat(
+                (
+                    xyz_masked_flat,
+                    tactile_masked_flat + NUM_XYZ_TOKENS,
+                ),
+                dim=1,
+            )
+            spatial_predictions = self.spatial_predictor(
+                spatial_student_tokens, context_indices, spatial_target_indices
+            )
+
+            num_xyz_targets = xyz_masked_flat.shape[1]
+            spatial_xyz_predictions = spatial_predictions[:, :num_xyz_targets]
+            spatial_tactile_predictions = spatial_predictions[:, num_xyz_targets:]
+            repeated_teacher_xyz = teacher_current_xyz.repeat(
+                num_group_views, 1, 1
+            )
+            repeated_teacher_tactile = teacher_current_tactile.repeat(
+                num_group_views, 1, 1
+            )
+            spatial_xyz_targets = self._gather_tokens(
+                repeated_teacher_xyz, xyz_masked_flat
+            )
+            spatial_tactile_targets = self._gather_tokens(
+                repeated_teacher_tactile, tactile_masked_flat
+            )
+            group_xyz_loss = self._latent_loss(
+                spatial_xyz_predictions, spatial_xyz_targets
+            )
+            group_tactile_loss = self._latent_loss(
+                spatial_tactile_predictions, spatial_tactile_targets
+            )
+            spatial_xyz_loss_sum = (
+                spatial_xyz_loss_sum + num_group_views * group_xyz_loss
+            )
+            spatial_tactile_loss_sum = (
+                spatial_tactile_loss_sum + num_group_views * group_tactile_loss
+            )
+
+            if self.training:
+                self._accumulate_batch_direction_stats(
+                    "student_spatial_encoder_embedding",
+                    spatial_student_tokens,
+                    context_indices,
+                    NUM_TOKEN_POSITIONS,
+                )
+
+        spatial_xyz_loss = spatial_xyz_loss_sum / self.num_spatial_mask_views
+        spatial_tactile_loss = (
+            spatial_tactile_loss_sum / self.num_spatial_mask_views
+        )
+
+        if self.training:
+            self._accumulate_batch_direction_stats(
+                "student_temporal_encoder_embedding",
+                temporal_student_tokens,
+                full_token_indices,
+                NUM_TOKEN_POSITIONS,
+            )
+            self._accumulate_batch_direction_stats(
+                "teacher_current_encoder_embedding",
+                teacher_current,
+                full_token_indices,
+                NUM_TOKEN_POSITIONS,
+            )
+            self._accumulate_batch_direction_stats(
+                "teacher_future_encoder_embedding",
+                teacher_future,
+                full_token_indices,
+                NUM_TOKEN_POSITIONS,
+            )
+
         total_loss = (
             self.spatial_tactile_loss_weight * spatial_tactile_loss
             + self.spatial_xyz_loss_weight * spatial_xyz_loss
@@ -373,6 +524,50 @@ class SpatiotemporalTactileJEPAModule(Module, nn.Module):
         self, outputs: Dict, batch: Dict, batch_idx: int, trainer_instance=None
     ) -> None:
         self._log_outputs(outputs, "val", trainer_instance)
+
+    def on_train_epoch_start(self, trainer_instance=None) -> None:
+        self._epoch_latent_stats = {}
+
+    def on_train_epoch_end(self, trainer_instance=None) -> None:
+        epoch_metrics = {}
+        for name, stats in self._epoch_latent_stats.items():
+            if dist.is_available() and dist.is_initialized():
+                for value in stats.values():
+                    dist.all_reduce(value, op=dist.ReduceOp.SUM)
+
+            count = stats["count"]
+            valid_positions = count > 1
+            if not valid_positions.any():
+                continue
+
+            denominator = count.clamp_min(1.0).unsqueeze(-1)
+            mean = stats["sum"] / denominator
+            variance = stats["squared_sum"] / denominator - mean.square()
+            std = variance.clamp_min(0.0).sqrt()
+            epoch_metrics[name] = std[valid_positions].mean()
+
+        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+        if rank == 0 and epoch_metrics:
+            epoch_number = (
+                trainer_instance.current_epoch + 1
+                if trainer_instance is not None
+                else 0
+            )
+            formatted = ", ".join(
+                f"{name}={value.item():.6f}"
+                for name, value in sorted(epoch_metrics.items())
+            )
+            print(f"[JEPA batch-direction std][epoch {epoch_number}] {formatted}")
+
+            if trainer_instance is not None:
+                payload = {
+                    f"train_epoch/batch_direction_std/{name}": value
+                    for name, value in epoch_metrics.items()
+                }
+                payload["global_train_step"] = trainer_instance.step
+                trainer_instance.wandb.log(payload)
+
+        self._epoch_latent_stats = {}
 
     def configure_optimizers(
         self, num_iterations_per_epoch: int, num_epochs: int

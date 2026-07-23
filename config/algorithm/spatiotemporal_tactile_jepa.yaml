@@ -4,11 +4,12 @@ sensor_input_key: joint_force
 pos_input_key: finger_xyz
 context_window_size: 3
 
-# Finger identities are sampled independently for the two modalities.
-# 0.4 masks four tactile fingers (4 tokens each) and four XYZ fingers
-# (1 token each). The sampled finger sets may overlap only by chance.
-tactile_mask_ratio: 0.4
-xyz_mask_ratio: 0.4
+# Spatial JEPA uses 8 independent views spanning 10%-60% masked fingers.
+# Tactile and XYZ finger identities are sampled independently in every view.
+# With 10 fingers this yields masked-finger counts 1,2,2,3,4,5,5,6.
+num_spatial_mask_views: 8
+spatial_mask_ratio_min: 0.1
+spatial_mask_ratio_max: 0.4
 
 spatial_tactile_loss_weight: 1.0
 spatial_xyz_loss_weight: 1.0
@@ -64,4 +65,3 @@ wd_scheduler_cfg:
   final_weight_decay: 0.04
   ref_weight_decay: 0.004
   T_max: ???
-
