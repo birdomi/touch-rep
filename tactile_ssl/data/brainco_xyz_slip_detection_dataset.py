@@ -151,7 +151,7 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
             or exclude_after_slip_end_frames < 0
         ):
             raise ValueError("Slip transition exclusion margins must be >= 0")
-        max_values = torch.tensor([25000, 25000, 365, 500000], dtype=torch.float32)
+        max_values = torch.tensor([25000, 25000, 25000, 500000], dtype=torch.float32)
         num_excluded_windows = 0
 
         for class_name in class_names:
@@ -188,11 +188,15 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
                     continue
 
                 tactile = episode.tactile_array.copy()
-                tactile_valid = tactile >= 0
+                tactile_valid = episode.tactile_valid_array.copy()
                 if subtract_baseline:
                     baseline = tactile[0].copy()
-                    valid = tactile_valid & (baseline[np.newaxis] >= 0)
-                    tactile -= np.where(valid, baseline[np.newaxis], 0)
+                    valid = tactile_valid & tactile_valid[0][np.newaxis]
+                    tactile = np.where(
+                        valid, tactile - baseline[np.newaxis], 0.0
+                    )
+                else:
+                    tactile = np.where(tactile_valid, tactile, 0.0)
 
                 tactile = torch.from_numpy(tactile)
                 tactile = tactile / max_values.view(1, 1, -1)

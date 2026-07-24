@@ -116,9 +116,13 @@ class BraincoXYZGraspDataset(data.Dataset):
                     if subtract_baseline:
                         tactile = episode.tactile_array
                         baseline = tactile[0].copy()
-                        valid = (tactile >= 0) & (baseline[np.newaxis] >= 0)
-                        baseline_full = np.broadcast_to(baseline, tactile.shape)
-                        tactile[valid] -= baseline_full[valid]
+                        valid = (
+                            episode.tactile_valid_array
+                            & episode.tactile_valid_array[0][np.newaxis]
+                        )
+                        tactile[:] = np.where(
+                            valid, tactile - baseline[np.newaxis], 0.0
+                        )
 
                     starts = [int(start) for start in episode.data_idxs]
                     self.episode_data.append({
