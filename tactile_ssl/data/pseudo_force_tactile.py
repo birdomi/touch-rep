@@ -13,8 +13,8 @@ Expected pickle format::
         ...,
     }
 
-The four sensor channels are ``normal_force``, ``tangential_force``,
-``tangential_direction``, and ``proximity`` in that order.
+The four model channels are ``Fn``, ``Ft*cos(theta)``, ``Ft*sin(theta)``,
+and ``proximity`` in that order.
 """
 
 import pickle
@@ -27,15 +27,13 @@ import torch
 import torch.utils.data as data
 
 from tactile_ssl.utils.logging import get_pylogger
+from tactile_ssl.data.force_channels import (
+    FORCE_CHANNELS,
+    RAW_FORCE_CHANNELS,
+    force_direction_to_cartesian,
+)
 
 log = get_pylogger(__name__)
-
-FORCE_CHANNELS = (
-    "normal_force",
-    "tangential_force",
-    "tangential_direction",
-    "proximity",
-)
 _FINGERTIP_INDICES = (4, 8, 12, 16, 20)
 
 
@@ -51,9 +49,9 @@ class _PseudoForceSequenceData:
         lh_tip_pos: np.ndarray,
         rh_tip_pos: np.ndarray,
     ):
-        self.joint_contact = torch.from_numpy(
-            np.concatenate([lh_contact, rh_contact], axis=1)
-        )
+        joint_contact = np.concatenate([lh_contact, rh_contact], axis=1)
+        joint_contact, _ = force_direction_to_cartesian(joint_contact)
+        self.joint_contact = torch.from_numpy(joint_contact)
         self.finger_xyz = torch.from_numpy(
             np.concatenate([lh_tip_pos, rh_tip_pos], axis=1)
         )
@@ -65,9 +63,8 @@ class _PseudoForceSequenceData:
         finger_xyz: np.ndarray,
     ) -> "_PseudoForceSequenceData":
         sequence = cls.__new__(cls)
-        sequence.joint_contact = torch.from_numpy(
-            np.ascontiguousarray(joint_contact, dtype=np.float32)
-        )
+        joint_contact, _ = force_direction_to_cartesian(joint_contact)
+        sequence.joint_contact = torch.from_numpy(np.ascontiguousarray(joint_contact))
         sequence.finger_xyz = torch.from_numpy(
             np.ascontiguousarray(finger_xyz, dtype=np.float32)
         )
@@ -91,8 +88,8 @@ def _extract_hand(frame: dict, hand: str, path: Path, frame_index: int):
     if hand_data is None:
         # Some source datasets contain single-hand frames. Keep the fixed
         # two-hand token layout and represent the absent hand as no contact.
-        force = np.zeros((21, len(FORCE_CHANNELS)), dtype=np.float32)
-        force[:, FORCE_CHANNELS.index("tangential_direction")] = -1.0
+        force = np.zeros((21, len(RAW_FORCE_CHANNELS)), dtype=np.float32)
+        force[:, RAW_FORCE_CHANNELS.index("tangential_direction")] = -1.0
         tip_pos = np.zeros((5, 3), dtype=np.float32)
         return force, tip_pos
 
@@ -113,7 +110,7 @@ def _extract_hand(frame: dict, hand: str, path: Path, frame_index: int):
             f"got {tip_pos.shape}"
         )
 
-    force = np.empty((21, len(FORCE_CHANNELS)), dtype=np.float32)
+    force = np.empty((21, len(RAW_FORCE_CHANNELS)), dtype=np.float32)
     for joint_offset, joint in enumerate(joints):
         summary = joint.get("summary")
         if summary is None:
@@ -122,7 +119,9 @@ def _extract_hand(frame: dict, hand: str, path: Path, frame_index: int):
                 "missing summary"
             )
         try:
-            force[joint_offset] = [float(summary[key]) for key in FORCE_CHANNELS]
+            force[joint_offset] = [
+                float(summary[key]) for key in RAW_FORCE_CHANNELS
+            ]
         except KeyError as exc:
             raise KeyError(
                 f"{path}: frame {frame_index} {hand}.joints[{joint_offset}].summary "

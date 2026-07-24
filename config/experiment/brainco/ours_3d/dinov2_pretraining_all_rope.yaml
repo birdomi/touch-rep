@@ -23,4 +23,5 @@ algorithm:
   encoder:
     in_chans: 4
     pos_in_chans: 3
-    pre_fusion_depth: 0
+    sensor_time_chunk_size: 1
+    pre_fusion_depth: 1

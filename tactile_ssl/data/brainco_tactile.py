@@ -9,6 +9,7 @@ import pytorch_kinematics as pk
 from omegaconf import DictConfig
 
 from tactile_ssl.utils.logging import get_pylogger
+from tactile_ssl.data.force_channels import force_direction_to_cartesian
 
 log = get_pylogger(__name__)
 
@@ -292,7 +293,7 @@ class BraincoSSLDataset(data.Dataset):
                            Defaults to {brainco_urdf_path}/revo2_right_hand.yml.
 
     Output per sample:
-        sensor:       Tensor(W, 10, 4)  — tactile data, ch2 null(65535)→-1
+        sensor:       Tensor(W, 10, 4)  — [Fn, Ft*cosθ, Ft*sinθ, proximity]
         sensor_poses: Tensor(W, 10, 3) or (W, 42, 3)
         wrist_poses:  Tensor(W, 2, 9)  — [3D translation rel. virtual root, 6D rotation]
         object_classification: Tensor  — only if object_class is not None
@@ -315,9 +316,7 @@ class BraincoSSLDataset(data.Dataset):
         self.window_time = config.window_time
         self.interpolating_freq = config.interpolating_freq
         self.num_frames_per_window = int(round(self.window_time * self.interpolating_freq))
-        # Fixed [0, max] scaling only. Dataset statistics are not used for
-        # an additional z-score normalization in the BrainCo loader.
-        self.max_values = [25000, 25000, 365, 250000]
+        self.max_values = [25000, 25000, 25000, 500000]
 
         overlap = config.get("window_overlap", 0.0)
         assert 0 <= overlap < 1, "window_overlap must be in [0, 1)"
@@ -432,6 +431,9 @@ class BraincoSSLDataset(data.Dataset):
         # ch2: 65535 (invalid) → -1
         invalid_mask = self.tactile_array[..., 2] == 65535
         self.tactile_array[..., 2][invalid_mask] = -1
+        self.tactile_array, self.tactile_valid_array = (
+            force_direction_to_cartesian(self.tactile_array)
+        )
 
         log.info(f"tactile_array shape: {self.tactile_array.shape}")
 
@@ -546,8 +548,8 @@ if __name__ == "__main__":
     print(f"  num_frames       : {dataset.num_frames}")
     print(f"  frames_per_window: {dataset.num_frames_per_window}")
     print(f"  shift_per_window : {dataset.shift_per_window}")
-    null_ratio = (dataset.tactile_array[..., 2] == -1).mean()
-    print(f"  ch2 null ratio   : {null_ratio:.1%}")
+    null_ratio = (~dataset.tactile_valid_array[..., 1]).mean()
+    print(f"  tangential null ratio: {null_ratio:.1%}")
     wrist_t = dataset.wrist_poses[:, :, :3]
     d = np.linalg.norm(wrist_t[:, 0] - wrist_t[:, 1], axis=-1)
     print(f"  wrist-wrist dist : min={d.min():.3f}  mean={d.mean():.3f}  max={d.max():.3f} m\n")

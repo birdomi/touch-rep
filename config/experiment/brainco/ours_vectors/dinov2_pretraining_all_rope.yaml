@@ -14,5 +14,5 @@ algorithm:
   encoder:
     # Multimodal RoPE over hand/finger axes; angle joint values remain channels.
     pos_embed_fn: rope
-    rope_hand_offset: 0
+    rope_hand_offset: 10
     debug_rope: true

@@ -3,12 +3,11 @@
 Architecture
 ------------
 Two asymmetric streams:
-  sensor : joint_contact  (B, T, N_joints=42,  C=1) — contact per joint
-  pos    : finger_angles  (B, T, N_fingers=10, C=4) — finger angle vectors
+  sensor : joint_contact (B, T, N_joints=42, C=4) — force per joint
+  pos    : finger_xyz   (B, T, N_fingers=10, C=3) — fingertip positions
 
-Both streams are independently compressed via PatchEmbed1d (Conv1d), then:
-  1. sensor_block  : pre-fusion self-attention on sensor tokens
-  2. Concat fusion : cat([pos, sen]) → shared blocks → output
+The sensor stream keeps one token per frame and joint. Pre-fusion uses the last
+frame as queries and all frames as keys/values, then concatenates with XYZ.
 
 When ``pos_embed_fn="rope"``, the 10 angle tokens are encoded with multimodal
 RoPE coordinates ``(hand, finger, -1)`` while the 4 joint values stay as token
@@ -27,8 +26,7 @@ from omegaconf import DictConfig
 
 from tactile_ssl.utils.logging import get_pylogger
 from tactile_ssl.model import SignalTransformer
-from .layers import MemEffAttention, Mlp, PatchEmbed1d
-from .layers import NestedTensorBlock as Block
+from .layers import CrossAttentionBlock, PatchEmbed1d
 
 log = get_pylogger(__name__)
 
@@ -87,6 +85,7 @@ class AngleTransformer(SignalTransformer):
         pos_in_chans: int = 4,
         sequence_length: int = 1,
         time_chunk_size: int = 1,
+        sensor_time_chunk_size: Optional[int] = None,
         embed_dim: int = 192,
         depth: int = 8,
         num_heads: int = 3,
@@ -114,6 +113,15 @@ class AngleTransformer(SignalTransformer):
     ):
         assert sequence_length % time_chunk_size == 0, (
             f"sequence_length({sequence_length}) must be divisible by time_chunk_size({time_chunk_size})"
+        )
+        sensor_time_chunk_size = (
+            time_chunk_size
+            if sensor_time_chunk_size is None
+            else int(sensor_time_chunk_size)
+        )
+        assert sequence_length % sensor_time_chunk_size == 0, (
+            f"sequence_length({sequence_length}) must be divisible by "
+            f"sensor_time_chunk_size({sensor_time_chunk_size})"
         )
         assert in_dim % 2 == 0, f"in_dim({in_dim}) must be even (left/right hand)"
         assert pos_in_dim % 2 == 0, f"pos_in_dim({pos_in_dim}) must be even (left/right hand)"
@@ -155,6 +163,8 @@ class AngleTransformer(SignalTransformer):
         self.use_rope = pos_embed_fn in {"rope", "multimodal_rope", "mrope"}
         self.rope_hand_offset = rope_hand_offset
         self.pos_token_dim = pos_in_dim
+        self.sensor_time_chunk_size = sensor_time_chunk_size
+        self.sensor_num_chunks = sequence_length // sensor_time_chunk_size
         self.pre_fusion_depth = pre_fusion_depth if pre_fusion_depth is not None else depth // 4
         self.fine_tune_sensor_shallow_blocks = (
             self.pre_fusion_depth
@@ -182,27 +192,31 @@ class AngleTransformer(SignalTransformer):
             self.hand_embed = nn.Parameter(torch.zeros(2, D))
 
         # ── PatchEmbed1d ───────────────────────────────────────────────────────
-        self.sensor_embed    = _make_embed1d(in_chans,     seq, chunk, D)  # contact
-        self.angle_embed = _make_embed1d(pos_in_chans, seq, chunk, D)  # angles
+        self.sensor_embed = _make_embed1d(
+            in_chans, seq, sensor_time_chunk_size, D
+        )
+        self.angle_embed = _make_embed1d(pos_in_chans, seq, chunk, D)
+        self.sensor_time_embed = nn.Parameter(
+            torch.zeros(1, self.sensor_num_chunks, 1, D)
+        )
 
-        # ── Pre-fusion sensor blocks ───────────────────────────────────────────
+        # ── Pre-fusion: last-frame queries attend to all sensor frames ─────────
         self.sensor_block = nn.ModuleList([
-            Block(
-                attn_class=MemEffAttention,
+            CrossAttentionBlock(
                 dim=D,
                 num_heads=num_heads,
                 mlp_ratio=mlp_ratio,
                 qkv_bias=qkv_bias,
-                proj_bias=proj_bias,
-                ffn_bias=ffn_bias,
-                drop_path=0.0,
                 norm_layer=norm_layer,
                 act_layer=act_layer,
-                ffn_layer=Mlp,
-                init_values=init_values,
             )
             for _ in range(self.pre_fusion_depth)
         ])
+        if self.sensor_num_chunks > 1 and not self.sensor_block:
+            raise ValueError(
+                "pre_fusion_depth must be >= 1 when sensor tokens span "
+                "multiple time chunks"
+            )
 
         # ── Normalization buffers ──────────────────────────────────────────────
         if normalization is not None:
@@ -216,6 +230,7 @@ class AngleTransformer(SignalTransformer):
 
 
         self.init_weights()
+        nn.init.trunc_normal_(self.sensor_time_embed, std=0.02)
         if self.hand_embed is not None:
             nn.init.trunc_normal_(self.hand_embed, std=0.02)
 
@@ -225,7 +240,9 @@ class AngleTransformer(SignalTransformer):
 
         num_chunks = seq // chunk
         log.info(
-            f"AngleTransformer: T={seq}, chunk={chunk}, num_chunks={num_chunks}, "
+            f"AngleTransformer: T={seq}, pos_chunk={chunk}, num_chunks={num_chunks}, "
+            f"sensor_chunk={self.sensor_time_chunk_size}, "
+            f"sensor_num_chunks={self.sensor_num_chunks}, "
             f"N_contact={in_dim}, N_angles={pos_in_dim}, "
             f"N_angle_tokens={self.pos_token_dim}, "
             f"pre_fusion_depth={self.pre_fusion_depth}, embed_dim={D}, "
@@ -420,7 +437,8 @@ class AngleTransformer(SignalTransformer):
         """
         B = x.shape[0]
         x = self.normalize(x)
-        return _apply_embed1d(x, self.sensor_embed, B)
+        x = _apply_embed1d(x, self.sensor_embed, B)
+        return x + self.sensor_time_embed
 
     def pre_pos_embed(self, pos: torch.Tensor) -> torch.Tensor:
         """PatchEmbed1d for angle stream (no normalization).
@@ -516,12 +534,30 @@ class AngleTransformer(SignalTransformer):
 
     # ── pre-fusion sensor blocks ───────────────────────────────────────────────
 
-    def sensor_transform(self, x: torch.Tensor, _bias, rope_positions=None) -> torch.Tensor:
-        """Pre-fusion self-attention over contact tokens."""
+    def sensor_transform(self, x: torch.Tensor, _bias, rope_positions=None):
+        """Last-frame queries cross-attend to all temporal sensor tokens."""
+        if _bias is not None:
+            raise NotImplementedError("Causal bias is not supported in sensor cross-attention")
+        if x.shape[1] % self.sensor_num_chunks != 0:
+            raise ValueError(
+                f"Sensor token count {x.shape[1]} is not divisible by "
+                f"sensor_num_chunks={self.sensor_num_chunks}"
+            )
+        tokens_per_frame = x.shape[1] // self.sensor_num_chunks
+        q = x[:, -tokens_per_frame:]
+        q_rope_positions = (
+            None
+            if rope_positions is None
+            else rope_positions[:, -tokens_per_frame:]
+        )
         for blk in self.sensor_block:
-            kwargs = {} if rope_positions is None else {"rope_positions": rope_positions}
-            x = blk(x, _bias, **kwargs)
-        return x
+            q = blk(
+                q,
+                x,
+                q_rope_positions=q_rope_positions,
+                x_rope_positions=rope_positions,
+            )
+        return q, q_rope_positions
 
     # ── fusion ────────────────────────────────────────────────────────────────
 
@@ -591,6 +627,7 @@ class AngleTransformer(SignalTransformer):
         mask_type: Optional[Literal["block", "tubelet"]] = None,
         masktoken_masks: Optional[List[torch.Tensor]] = None,
         pos_masks: Optional[torch.Tensor] = None,
+        pos_masktoken_masks: Optional[List[torch.Tensor]] = None,
     ) -> dict:
         """Full forward pass.
 
@@ -601,6 +638,7 @@ class AngleTransformer(SignalTransformer):
             mask_type : "block" or "tubelet"
             masktoken_masks: mask token positions
             pos_masks : angle stream masking (defaults to masks if None)
+            pos_masktoken_masks: mask token positions for the angle/XYZ stream
 
         Returns:
             dict with keys:
@@ -637,12 +675,14 @@ class AngleTransformer(SignalTransformer):
             joint_embed=sen_pe, skip_register=True, rope_stream="contact",
         )
         pos, _, pos_rope_positions = self.prepare_tokens_with_mask(
-            pos, _pos_masks, mask_type, None,
+            pos, _pos_masks, mask_type, pos_masktoken_masks,
             joint_embed=ang_pe, skip_register=False, rope_stream="angle",
         )
 
         # --- pre-fusion sensor attention -------------------------------------
-        sen = self.sensor_transform(x, bias, rope_positions=sen_rope_positions)
+        sen, sen_rope_positions = self.sensor_transform(
+            x, bias, rope_positions=sen_rope_positions
+        )
 
         # --- fusion ----------------------------------------------------------
         x_prenorm, x_postnorm = self.transform_concat(

@@ -303,13 +303,24 @@ class CrossAttention(nn.Module):
         self.proj_drop = nn.Dropout(proj_drop)
         self.use_sdpa = use_sdpa
 
-    def forward(self, q: Tensor, x: Tensor, attn_bias=None):
+    def forward(
+        self,
+        q: Tensor,
+        x: Tensor,
+        attn_bias=None,
+        q_rope_positions=None,
+        x_rope_positions=None,
+    ):
         B, n, C = q.shape
         q = self.q(q).reshape(B, n, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
 
         B, N, C = x.shape
         kv = self.kv(x).reshape(B, N, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         k, v = kv[0], kv[1]  # (batch_size, num_heads, seq_len, feature_dim_per_head)
+        if q_rope_positions is not None:
+            q = _apply_rope(q, q_rope_positions, seq_dim=2)
+        if x_rope_positions is not None:
+            k = _apply_rope(k, x_rope_positions, seq_dim=2)
 
         if self.use_sdpa:
             with torch.backends.cuda.sdp_kernel():
@@ -329,11 +340,23 @@ class CrossAttention(nn.Module):
 
 
 class MemEffCrossAttention(CrossAttention):
-    def forward(self, q: Tensor, x: Tensor, attn_bias=None) -> Tensor:
+    def forward(
+        self,
+        q: Tensor,
+        x: Tensor,
+        attn_bias=None,
+        q_rope_positions=None,
+        x_rope_positions=None,
+    ) -> Tensor:
         if not XFORMERS_AVAILABLE:
             if attn_bias is not None:
                 raise AssertionError("xFormers is required for using nested tensors")
-            return super().forward(q, x)
+            return super().forward(
+                q,
+                x,
+                q_rope_positions=q_rope_positions,
+                x_rope_positions=x_rope_positions,
+            )
 
         B, n, C = q.shape
         q = self.q(q).reshape(B, n, self.num_heads, C // self.num_heads)
@@ -341,6 +364,10 @@ class MemEffCrossAttention(CrossAttention):
         B, N, C = x.shape
         kv = self.kv(x).reshape(B, N, 2, self.num_heads, C // self.num_heads)
         k, v = unbind(kv, 2)
+        if q_rope_positions is not None:
+            q = _apply_rope(q, q_rope_positions, seq_dim=1)
+        if x_rope_positions is not None:
+            k = _apply_rope(k, x_rope_positions, seq_dim=1)
 
         q = memory_efficient_attention(q, k, v, attn_bias=attn_bias, p=self.attn_drop.p)
         q = q.reshape([B, n, C])
@@ -367,8 +394,21 @@ class CrossAttentionBlock(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = MLP(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer)
 
-    def forward(self, q, x, attn_bias=None):
-        y = self.xattn(q, self.norm1(x), attn_bias=attn_bias)
+    def forward(
+        self,
+        q,
+        x,
+        attn_bias=None,
+        q_rope_positions=None,
+        x_rope_positions=None,
+    ):
+        y = self.xattn(
+            q,
+            self.norm1(x),
+            attn_bias=attn_bias,
+            q_rope_positions=q_rope_positions,
+            x_rope_positions=x_rope_positions,
+        )
         q = q + y
         q = q + self.mlp(self.norm2(q))
         return q

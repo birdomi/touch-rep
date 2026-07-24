@@ -99,7 +99,7 @@ class AngleDinov2Module(BraincoDINOv2Module):
                 device=ibot_masks.device,
             ) < ibot_ratio
         )
-        full_ibot = torch.cat([ibot_masks, pos_ibot], dim=-1)
+        full_ibot = torch.cat([pos_ibot, ibot_masks], dim=-1)
 
         return global_masks, local_masks, ibot_masks, pos_global_masks, pos_local_masks, full_ibot
 
@@ -120,6 +120,7 @@ class AngleDinov2Module(BraincoDINOv2Module):
         n_x     = global_masks.shape[-1]
         n_p     = pos_global_masks.shape[-1]
         n_total = n_x + n_p
+        pos_ibot = full_ibot[..., :n_p]
 
         ibot_masks_flat   = full_ibot.flatten(0, 1)
         ibot_mask_indices = torch.nonzero(ibot_masks_flat).flatten()
@@ -129,6 +130,7 @@ class AngleDinov2Module(BraincoDINOv2Module):
             xs, pos,
             masks=global_masks, mask_type="tubelet", masktoken_masks=ibot_masks,
             pos_masks=pos_global_masks,
+            pos_masktoken_masks=pos_ibot,
         )
         student_local_dict = self.student_encoder_dict["backbone"].forward_features(
             xs, pos,
