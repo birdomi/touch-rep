@@ -315,7 +315,9 @@ class BraincoSSLDataset(data.Dataset):
         self.window_time = config.window_time
         self.interpolating_freq = config.interpolating_freq
         self.num_frames_per_window = int(round(self.window_time * self.interpolating_freq))
-        self.max_values = [25000, 25000, 365, 500000]
+        # Fixed [0, max] scaling only. Dataset statistics are not used for
+        # an additional z-score normalization in the BrainCo loader.
+        self.max_values = [25000, 25000, 365, 250000]
 
         overlap = config.get("window_overlap", 0.0)
         assert 0 <= overlap < 1, "window_overlap must be in [0, 1)"
@@ -447,7 +449,7 @@ class BraincoSSLDataset(data.Dataset):
         end = start + self.num_frames_per_window
 
         sensor = torch.from_numpy(self.tactile_array[start:end].copy())  # (W, 10, 4)
-        sensor = sensor / torch.tensor(self.max_values).view(1, 1, -1)  # normalize to [0, 1]
+        sensor = sensor / torch.tensor(self.max_values).view(1, 1, -1)  # fixed channel-max scaling
         fingertip_poses = torch.from_numpy(self.fingertip_rel[start:end].copy())  # (W, 10, 3)
         if self.human_skeleton is not None:
             skeleton_poses = torch.from_numpy(self.human_skeleton[start:end].copy())  # (W, 42, 3)

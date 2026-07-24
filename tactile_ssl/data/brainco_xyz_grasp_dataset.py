@@ -111,12 +111,14 @@ class BraincoXYZGraspDataset(data.Dataset):
                         )
                         continue
 
+                    tactile_valid = episode.tactile_array >= 0
+
                     # Match the existing angle downstream preprocessing: remove
                     # each episode's initial tactile bias before max scaling.
                     if subtract_baseline:
                         tactile = episode.tactile_array
                         baseline = tactile[0].copy()
-                        valid = (tactile >= 0) & (baseline[np.newaxis] >= 0)
+                        valid = tactile_valid & (baseline[np.newaxis] >= 0)
                         baseline_full = np.broadcast_to(baseline, tactile.shape)
                         tactile[valid] -= baseline_full[valid]
 
@@ -133,8 +135,17 @@ class BraincoXYZGraspDataset(data.Dataset):
                         finger_xyz = sample["sensor_poses"]
                         if align_xyz_to_npz:
                             finger_xyz = _align_xyz_to_npz(finger_xyz)
+                        contact_valid = torch.from_numpy(
+                            tactile_valid[
+                                start : start + episode.num_frames_per_window
+                            ].copy()
+                        )
+                        joint_contact = sample["sensor"].masked_fill(
+                            ~contact_valid, 0.0
+                        )
                         self.windows.append({
-                            "joint_contact": sample["sensor"],
+                            "joint_contact": joint_contact,
+                            "joint_contact_valid": contact_valid,
                             "finger_xyz": finger_xyz,
                             "label": label_tensor,
                             "episode_path": str(episode_path),

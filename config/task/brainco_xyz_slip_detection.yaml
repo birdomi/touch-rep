@@ -25,7 +25,7 @@ trainer:
   sanity_validate: true
   save_checkpoint_dir: ${paths.output_dir}/checkpoints
   checkpoint_interval_type: log
-  max_task_checkpoints: 10
+  max_task_checkpoints: 1
   save_probe_weights_only: true
 
 data:
@@ -47,13 +47,13 @@ task:
     time_chunk_size: 1
     num_register_tokens: 1
     pos_embed_fn: rope
-    with_masktoken: true
-    use_null_token: true
-    drop_path_rate: 0.3
+    with_masktoken: false
+    use_null_token: false
+    drop_path_rate: 0.0
     drop_path_uniform: true
     normalization: ~
     causal: false
-    rope_hand_offset: 0
+    rope_hand_offset: 100
     debug_rope: false
     pre_fusion_depth: 0
 

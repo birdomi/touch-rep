@@ -1,0 +1,33 @@
+# @package _global_
+
+# Fine-tune the three-frame Tactile JEPA student encoder for binary grasp
+# success prediction.
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/dinov2_all_rope_temp3
+  - _self_
+
+ssl_name: tactile_jepa
+experiment_name: brainco_xyz_grasp_prediction_tactile_jepa
+
+wandb:
+  group: tactile_jepa_pretrained
+  tags: ["brainco", "xyz", "grasp_prediction", "tactile_jepa", "pretrained", "rope", "temporal3"]
+
+task:
+  # Load only the EMA teacher_encoder.* weights from the JEPA checkpoint.
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/tactile_jepa/epoch-0080.ckpt
+  encoder_type: tactile_jepa_teacher
+  train_encoder: true
+  # Full encoder fine-tuning; this flag is only needed for Conv1d-only tuning
+  # when train_encoder is false.
+  train_input_conv1d: true
+  model_encoder:
+    sequence_length: 3
+    time_chunk_size: 3
+    num_register_tokens: 0
+    pos_embed_fn: rope
+    rope_hand_offset: 100
+    pre_fusion_depth: 0
+    # Keep only the 10 observed fingertips and reuse their 42-joint skeleton
+    # RoPE coordinates. No extra null/mask-token parameter is introduced.
+    use_null_token: false

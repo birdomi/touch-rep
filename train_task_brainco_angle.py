@@ -42,24 +42,6 @@ OmegaConf.register_new_resolver("int_divide",          lambda a, b: a // b)
 OmegaConf.register_new_resolver("capitalize",          lambda s: s.title())
 
 
-def _compute_signal_stats(
-    all_contact: torch.Tensor,
-    signed_channels_from: int | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute per-channel stats while retaining signed delta observations."""
-    num_channels = all_contact.shape[-1]
-    signal_mean = torch.zeros(num_channels)
-    signal_std = torch.ones(num_channels)
-    for channel in range(num_channels):
-        values = all_contact[..., channel].reshape(-1).float()
-        if signed_channels_from is None or channel < signed_channels_from:
-            values = values[values >= 0]
-        if values.numel() > 0:
-            signal_mean[channel] = values.mean()
-            signal_std[channel] = values.std().clamp(min=1e-6)
-    return signal_mean, signal_std
-
-
 # ── wandb ──────────────────────────────────────────────────────────────────────
 
 def init_wandb(cfg: DictConfig):
@@ -95,14 +77,11 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
         train_indices = list(range(len(dataset.windows)))
         val_indices   = list(range(len(val_dataset.windows)))
 
-        # ── Normalization: compute signal stats from train joint_contact ──────
-        all_contact = torch.stack([dataset.windows[i]["joint_contact"] for i in train_indices])
-        signed_channels_from = (
-            4 if getattr(dataset, "include_force_delta", False) else None
-        )
-        signal_mean, signal_std = _compute_signal_stats(
-            all_contact, signed_channels_from=signed_channels_from
-        )
+        # Contact values are already min-max scaled in the dataset. Keep the
+        # encoder transform as identity instead of applying train-set z-score.
+        num_channels = dataset.windows[train_indices[0]]["joint_contact"].shape[-1]
+        signal_mean = torch.zeros(num_channels)
+        signal_std = torch.ones(num_channels)
 
         dataset.computed_signal_mean = signal_mean
         dataset.computed_signal_std  = signal_std
@@ -126,7 +105,7 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
             *[f"    [train] {n}" for n in _ep_names(dataset)],
             f"  Val:   {len(val_dataset.episode_data)} episodes",
             *[f"    [val]   {n}" for n in _ep_names(val_dataset)],
-            "Computing normalization stats from training data ...",
+            "Using dataset min-max scaling only (no train mean/std) ...",
             f"[NormStats] signal_mean: {signal_mean.tolist()}",
             f"[NormStats] signal_std:  {signal_std.tolist()}",
             "  (position stream: NOT normalized)",
@@ -206,17 +185,12 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
         *[f"    [val]   {n}" for n in val_ep_names],
     ]
 
-    # ── Normalization: compute signal stats from train joint_contact ──────────
-    lines.append("Computing normalization stats from training data ...")
-    all_contact = torch.stack([dataset.windows[i]["joint_contact"] for i in train_indices])
-    # all_contact: (N_train, W, 10, 4)
-
-    signed_channels_from = (
-        4 if getattr(dataset, "include_force_delta", False) else None
-    )
-    signal_mean, signal_std = _compute_signal_stats(
-        all_contact, signed_channels_from=signed_channels_from
-    )
+    # Contact values are already min-max scaled in the dataset. Keep the
+    # encoder transform as identity instead of applying train-set z-score.
+    lines.append("Using dataset min-max scaling only (no train mean/std) ...")
+    num_channels = dataset.windows[train_indices[0]]["joint_contact"].shape[-1]
+    signal_mean = torch.zeros(num_channels)
+    signal_std = torch.ones(num_channels)
 
     lines.append(f"[NormStats] signal_mean: {signal_mean.tolist()}")
     lines.append(f"[NormStats] signal_std:  {signal_std.tolist()}")
@@ -318,9 +292,10 @@ def get_dataloader_brainco_angle_oc(cfg: DictConfig):
         else:
             train_indices.extend(wins); train_ep_names.append(name)
 
-    # ── Normalization stats from training contact data ────────────────────────
-    all_contact = torch.stack([dataset.windows[i]["joint_contact"] for i in train_indices])
-    signal_mean, signal_std = _compute_signal_stats(all_contact)
+    # Contact values are already min-max scaled in the dataset.
+    num_channels = dataset.windows[train_indices[0]]["joint_contact"].shape[-1]
+    signal_mean = torch.zeros(num_channels)
+    signal_std = torch.ones(num_channels)
 
     dataset.computed_signal_mean = signal_mean
     dataset.computed_signal_std  = signal_std
@@ -369,6 +344,33 @@ def get_dataloaders(cfg: DictConfig):
     raise NotImplementedError(f"Unknown sensor: {cfg.data.sensor}")
 
 
+def _balanced_class_weights(train_dataset, num_classes: int) -> torch.Tensor:
+    """Compute N/(C*N_c) weights from the training subset only."""
+    counts = torch.zeros(num_classes, dtype=torch.long)
+    for index in range(len(train_dataset)):
+        sample = train_dataset[index]
+        label = int(torch.as_tensor(sample["label"]).item())
+        if not 0 <= label < num_classes:
+            raise ValueError(
+                f"Training label {label} is outside [0, {num_classes - 1}]"
+            )
+        counts[label] += 1
+
+    missing = torch.nonzero(counts == 0, as_tuple=False).flatten().tolist()
+    if missing:
+        raise ValueError(
+            "Cannot compute balanced class weights because the training split "
+            f"contains no samples for classes {missing}"
+        )
+
+    weights = counts.sum().float() / (num_classes * counts.float())
+    logger.info(
+        "Balanced cross-entropy weights from training split: "
+        f"counts={counts.tolist()}, weights={weights.tolist()}"
+    )
+    return weights
+
+
 # ── resume ─────────────────────────────────────────────────────────────────────
 
 def attempt_resume(cfg: DictConfig):
@@ -407,6 +409,14 @@ def train(cfg: DictConfig):
 
     logger.info(f"Instantiating dataset for <{cfg.data.dataset._target_}>")
     (train_loader, val_loader), _ = get_dataloaders(cfg)
+
+    if cfg.task.get("class_weights") == "balanced":
+        num_classes = int(cfg.task.model_task.num_classes)
+        class_weights = _balanced_class_weights(
+            train_loader.dataset, num_classes=num_classes
+        )
+        with open_dict(cfg.task):
+            cfg.task.class_weights = class_weights.tolist()
 
     logger.info(f"Instantiating model <{cfg.task._target_}>")
     model = hydra.utils.instantiate(cfg.task)

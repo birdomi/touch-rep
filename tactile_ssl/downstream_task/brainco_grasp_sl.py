@@ -7,7 +7,7 @@ for binary grasp success/fail classification.
 
 from functools import partial
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 import io
 
 import numpy as np
@@ -262,6 +262,7 @@ class BraincoGraspDetectionSLModule(SLModule):
         checkpoint_encoder: Optional[str] = None,
         checkpoint_task: Optional[str] = None,
         train_encoder: bool = False,
+        train_input_conv1d: bool = False,
         encoder_type: str = "dino",
         lora_rank: int = 0,
         lora_alpha: float = 1.0,
@@ -273,6 +274,7 @@ class BraincoGraspDetectionSLModule(SLModule):
         encoder_warmup_fine_tune_sensor_shallow_blocks: Optional[int] = None,
         log_confusion_matrix_image: bool = True,
         best_val_metric: str = "accuracy",
+        class_weights: Optional[Sequence[float]] = None,
     ):
         super().__init__(
             model_encoder=model_encoder,
@@ -282,6 +284,7 @@ class BraincoGraspDetectionSLModule(SLModule):
             checkpoint_encoder=checkpoint_encoder,
             checkpoint_task=checkpoint_task,
             train_encoder=train_encoder,
+            train_input_conv1d=train_input_conv1d,
             encoder_type=encoder_type,
             lora_rank=lora_rank,
             lora_alpha=lora_alpha,
@@ -326,7 +329,19 @@ class BraincoGraspDetectionSLModule(SLModule):
                     "Encoder warmup fine_tune_sensor schedule enabled for "
                     f"{self.encoder_warmup_fine_tune_sensor_epochs} epochs."
                 )
-        self.loss_fn = nn.CrossEntropyLoss()
+        self.num_classes = int(getattr(model_task, "num_classes", 2))
+        if class_weights is None:
+            loss_weights = None
+        else:
+            loss_weights = torch.as_tensor(class_weights, dtype=torch.float32)
+            if loss_weights.ndim != 1 or loss_weights.numel() != self.num_classes:
+                raise ValueError(
+                    "class_weights must contain one value per class: "
+                    f"expected {self.num_classes}, got {loss_weights.tolist()}"
+                )
+            if not torch.isfinite(loss_weights).all() or (loss_weights <= 0).any():
+                raise ValueError("class_weights must be finite and positive")
+        self.loss_fn = nn.CrossEntropyLoss(weight=loss_weights)
         self.val_preds = []
         self.val_labels = []
         self.val_failed_samples = []   # list of {sensor, label, pred}
@@ -338,8 +353,6 @@ class BraincoGraspDetectionSLModule(SLModule):
         
         embed_dim = self.model_encoder.embed_dim
         num_heads = getattr(self.model_encoder, "num_heads", 12)
-        # num_classes comes from model_task config; default to 2 (binary grasp).
-        self.num_classes = int(getattr(model_task, "num_classes", 2))
         self.pooler = AttentivePooler(
             embed_dim=embed_dim,
             num_heads=num_heads,
@@ -415,7 +428,8 @@ class BraincoGraspDetectionSLModule(SLModule):
         poses_input = sensor_poses.view(B * W, 1, N, 3)
 
         # Run encoder
-        with torch.no_grad() if not self.train_encoder else torch.enable_grad():
+        encoder_grad_enabled = self.encoder_grad_enabled()
+        with torch.enable_grad() if encoder_grad_enabled else torch.no_grad():
             out = self.model_encoder.forward_features(sensor_input, poses_input)
             x_tokens = out["x_tokens"]  # (B*num_windows, num_patches + 1, embed_dim)
             
@@ -440,7 +454,7 @@ class BraincoGraspDetectionSLModule(SLModule):
         embeddings = self.encode(sensor, sensor_poses, mask)
 
         # Apply classifier sequence modeling: expects (B, seq_len, embed_dim)
-        if self.train_encoder:
+        if self.encoder_grad_enabled():
             logits = self.classifier(embeddings)
         else:
             logits = self.classifier(embeddings.detach())

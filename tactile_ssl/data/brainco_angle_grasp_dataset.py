@@ -5,7 +5,7 @@ BraincoAngleTactileDataset logic (no FK), and aggregates windows.
 
 Output per window
 -----------------
-joint_contact      : (W, 10, 4)  — tactile sensor values, normalized to [0, 1]
+joint_contact      : (W, 10, 4)  — tactile values scaled by fixed channel maxima
 finger_angles      : (W, 10, 4)  — finger angle encoding [abd, MCP, PIP, DIP]
 label              : ()  long    — 0=fail, 1=success
 episode_path       : str
@@ -117,18 +117,20 @@ class BraincoAngleGraspDataset(data.Dataset):
 
                     tactile = np.array(tactile_list, dtype=np.float32)          # (N, 10, 4)
                     tactile[..., 2][tactile[..., 2] == 65535] = -1.0
+                    tactile_valid = tactile >= 0
 
                     if self.subtract_baseline:
                         baseline = tactile[0].copy()                             # (10, 4)
-                        valid_t  = tactile >= 0
                         valid_b  = baseline >= 0
-                        sub_mask = valid_t & valid_b[np.newaxis]
+                        sub_mask = tactile_valid & valid_b[np.newaxis]
                         tactile[sub_mask] -= np.broadcast_to(baseline, tactile.shape)[sub_mask]
 
                     max_vals = np.array(_TACTILE_MAX, dtype=np.float32)
                     tactile_norm = tactile.copy()
-                    valid = tactile_norm >= 0
-                    tactile_norm[valid] = (tactile_norm / max_vals)[valid]
+                    tactile_norm[tactile_valid] = (
+                        tactile_norm / max_vals
+                    )[tactile_valid]
+                    tactile_norm[~tactile_valid] = 0.0
 
                     # ── Angles ───────────────────────────────────────────────────
                     angle_list = []
@@ -156,6 +158,7 @@ class BraincoAngleGraspDataset(data.Dataset):
                         we = ws + self.num_frames_per_window
                         self.windows.append({
                             "joint_contact":      torch.from_numpy(tactile_norm[ws:we].copy()),
+                            "joint_contact_valid": torch.from_numpy(tactile_valid[ws:we].copy()),
                             "finger_angles":      torch.from_numpy(angles[ws:we].copy()),
                             "label":              label_tensor,
                             "episode_path":       str(ep_dir),

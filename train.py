@@ -376,14 +376,15 @@ def get_dataloaders_brainco_based(cfg: DictConfig):
             [train_dset_size, len(dataset) - train_dset_size],
         )
 
-    mean, std = _compute_sample_sensor_stats(train_dset)
-    if cfg.data.get("normalization") and cfg.data.normalization.get("mean") is None:
+    # BrainCo tactile values are already scaled by fixed per-channel maxima in
+    # the dataset. Keep encoder normalization as identity instead of applying
+    # an additional train-set mean/std z-score.
+    mean = [0.0] * 4
+    std = [1.0] * 4
+    if cfg.data.get("normalization"):
         with open_dict(cfg):
             cfg.data.normalization.mean = mean
             cfg.data.normalization.std = std
-    elif cfg.data.get("normalization"):
-        mean = cfg.data.normalization.mean
-        std = cfg.data.normalization.std
 
     train_dset.sensor_mean = mean
     train_dset.sensor_std = std
@@ -392,33 +393,6 @@ def get_dataloaders_brainco_based(cfg: DictConfig):
         val_dset.sensor_std = std
 
     return train_dset, val_dset
-
-
-def _compute_sample_sensor_stats(dataset):
-    sensor_tensors = []
-    for i in range(len(dataset)):
-        sample = dataset[i]
-        if "sensor" not in sample:
-            continue
-        sensor = sample["sensor"]
-        arr = sensor.cpu().float().numpy() if isinstance(sensor, torch.Tensor) else np.array(sensor, dtype=np.float32)
-        sensor_tensors.append(arr)
-
-    if not sensor_tensors:
-        return [0.0] * 4, [1.0] * 4
-
-    all_data_np = np.concatenate(sensor_tensors, axis=0)
-    mean, std = [], []
-    for c in range(all_data_np.shape[-1]):
-        ch = all_data_np[..., c].astype(np.float32)
-        valid = ch[ch >= 0] if c == 2 else ch.reshape(-1)
-        if valid.size == 0:
-            mean.append(0.0)
-            std.append(1.0)
-        else:
-            mean.append(float(valid.mean()))
-            std.append(float(max(valid.std(), 1e-6)))
-    return mean, std
 
 
 def get_dataloaders_brainco_angle_based(cfg: DictConfig):
@@ -455,27 +429,10 @@ def get_dataloaders_brainco_angle_based(cfg: DictConfig):
     train_dset = data.ConcatDataset(train_datasets) if len(train_datasets) > 1 else train_datasets[0]
     val_dset = data.ConcatDataset(val_datasets) if val_datasets else None
 
-    tactile_chunks = []
-    for ds in train_datasets:
-        inner = ds.dataset if hasattr(ds, "dataset") else ds
-        if hasattr(inner, "tactile_array"):
-            tactile_chunks.append(inner.tactile_array.reshape(-1, 4).astype(np.float32))
-
-    if tactile_chunks:
-        combined = np.concatenate(tactile_chunks, axis=0)
-        sensor_mean, sensor_std = [], []
-        for c in range(combined.shape[-1]):
-            ch = combined[:, c]
-            valid = ch[ch >= 0] if c == 2 else ch
-            if valid.size == 0:
-                sensor_mean.append(0.0)
-                sensor_std.append(1.0)
-            else:
-                sensor_mean.append(float(np.mean(valid)))
-                sensor_std.append(float(max(np.std(valid), 1e-6)))
-    else:
-        sensor_mean = [0.0] * 4
-        sensor_std = [1.0] * 4
+    # BrainCo angle tactile values are already scaled by fixed per-channel
+    # maxima in the dataset. Do not apply a second mean/std normalization.
+    sensor_mean = [0.0] * 4
+    sensor_std = [1.0] * 4
 
     with open_dict(cfg):
         cfg.data.normalization.mean = sensor_mean

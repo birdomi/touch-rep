@@ -43,8 +43,8 @@ dataset:
     exclude_after_slip_end_frames: 10
     # Object folders to include. Keep this explicit so ID and leave-one-object-out
     # experiments always use the same three-object universe.
-    classes: [slip_doll, slip_evacase, slip_pot]
-  data_path: ${paths.data_root}/brainco/downstream/slip_detection
+    classes: [slip_box_move, slip_case_move]
+  data_path: ${paths.data_root}/brainco/downstream/slip_detection_move
   brainco_urdf_path: ${paths.data_root}/brainco/urdf
 
 # When null, train_task_brainco_angle.py performs an episode-level K-fold split.

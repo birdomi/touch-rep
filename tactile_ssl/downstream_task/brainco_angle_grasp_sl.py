@@ -60,7 +60,8 @@ class BraincoAngleGraspSLModule(BraincoGraspDetectionSLModule):
                 f"encoder sequence_length={encoder_sequence_length}"
             )
 
-        ctx = torch.no_grad() if not self.train_encoder else torch.enable_grad()
+        encoder_grad_enabled = self.encoder_grad_enabled()
+        ctx = torch.enable_grad() if encoder_grad_enabled else torch.no_grad()
         with ctx:
             out      = self.model_encoder.forward_features(xs, pos)
             x_tokens = out["x_tokens"]                             # (B*W, reg+N, D)
@@ -83,7 +84,7 @@ class BraincoAngleGraspSLModule(BraincoGraspDetectionSLModule):
 
         embeddings = self.encode(joint_contact, position_input, mask)   # (B, W, D)
 
-        if self.train_encoder:
+        if self.encoder_grad_enabled():
             logits = self.classifier(embeddings)
         else:
             logits = self.classifier(embeddings.detach())

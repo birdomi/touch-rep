@@ -6,13 +6,13 @@ defaults:
   - _self_
 
 model_size: tiny
-experiment_name: spatiotemporal_tactile_jepa_all_${model_size}_rope
+experiment_name: tactile_jepa_${model_size}
 ckpt_path: ./
 
 wandb:
   entity: ryk9012-gwangju-institute-of-science-and-technology
   project: tactile_jepa
-  group: spatiotemporal_tactile_jepa_all_${model_size}_rope
+  group: tactile_jepa_${model_size}
   tags: ["all", "pseudo_force", "spatial_jepa", "temporal_jepa", "non_overlap", "finger_block", "rope"]
 
 trainer:
