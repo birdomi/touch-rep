@@ -322,6 +322,19 @@ class AngleTransformer(SignalTransformer):
         joint[is_finger_joint] = local_finger.remainder(SKELETON_JOINTS_PER_FINGER)
         return torch.stack([hand, finger, joint], dim=-1)
 
+    def _sparse_tactile_coords(self, device: torch.device) -> torch.Tensor:
+        """Return full-skeleton RoPE coordinates for the 10 sensed fingertips.
+
+        BrainCo provides tactile measurements only at the fingertip links. When
+        null-token expansion is disabled, retain those 10 tokens and select
+        their coordinates from the same 42-joint skeleton used in pretraining.
+        """
+        full_coords = self._skeleton_coords(FULL_SKELETON_SIZE, device)
+        fingertip_indices = torch.as_tensor(
+            TACTILE_SENSOR_IDXS, dtype=torch.long, device=device
+        )
+        return full_coords.index_select(0, fingertip_indices)
+
     def _rope_positions(self, x: torch.Tensor, stream: str) -> torch.Tensor:
         b, t, n = x.shape[:3]
         if stream == "angle":
@@ -329,8 +342,8 @@ class AngleTransformer(SignalTransformer):
             if n != expected:
                 raise ValueError(f"Angle RoPE expected {expected} tokens, got {n}")
             coords = self._finger_coords(n, x.device)
-        elif n == self.pos_in_dim:
-            coords = self._finger_coords(n, x.device)
+        elif not self.use_null_token and n == len(TACTILE_SENSOR_IDXS):
+            coords = self._sparse_tactile_coords(x.device)
         elif n == FULL_SKELETON_SIZE:
             coords = self._skeleton_coords(n, x.device)
         else:
@@ -410,7 +423,11 @@ class AngleTransformer(SignalTransformer):
     # ── embedding ─────────────────────────────────────────────────────────────
 
     def pre_sensor_embed(self, x: torch.Tensor) -> torch.Tensor:
-        """Zero-fill negatives → normalize → PatchEmbed1d.
+        """Apply the configured signal transform, then embed.
+
+        BrainCo adapters zero-fill invalid readings using their explicit
+        pre-baseline validity mask. Negative values can therefore be legitimate
+        baseline deltas and must not be treated as invalid here.
 
         Args:
             x : (B, T, N_joints, C)
@@ -419,9 +436,6 @@ class AngleTransformer(SignalTransformer):
             (B, num_chunks, N_joints, D)
         """
         B = x.shape[0]
-        x = x.clone()
-        # x[x < 0] = 0.0
-        # print(x, self.signal_mean, self.signal_std)
         x = self.normalize(x)
         x = _apply_embed1d(x, self.sensor_embed, B)
         return x + self.sensor_time_embed

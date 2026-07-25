@@ -143,9 +143,9 @@ class BraincoOneTransformer(SignalTransformer):
             raise ValueError(f"pos channels must be {self.pos_in_chans}, got {pos.shape[-1]}")
 
         b = x.shape[0]
-        x = x.clone()
-        x[x < 0] = 0.0
+        invalid_mask = x < 0
         x = self.normalize(x)
+        x = x.masked_fill(invalid_mask, 0.0)
 
         x = torch.cat([x, pos], dim=-1)
         x = _apply_embed1d(x, self.patch_embed, b)

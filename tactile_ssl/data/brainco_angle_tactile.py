@@ -2,7 +2,7 @@
 
 Output per sample
 -----------------
-joint_contact  : (W, 10, 4)  — tactile sensor values, normalized to [0, 1]
+joint_contact  : (W, 10, 4)  — tactile values scaled by fixed channel maxima
                                sensors 0-4 = left hand, 5-9 = right hand
 finger_angles  : (W, 10, 4)  — per-finger joint angle encoding (human-hand layout)
                                fingers 0-4 = left hand, 5-9 = right hand
@@ -38,7 +38,7 @@ from tactile_ssl.utils.logging import get_pylogger
 log = get_pylogger(__name__)
 
 # Normalization upper bounds per tactile channel (same as BraincoSSLDataset)
-_TACTILE_MAX = [25000.0, 25000.0, 365.0, 500000.0]
+_TACTILE_MAX = [25000.0, 25000.0, 365.0, 250000.0]
 
 # Distal-to-proximal coupling ratio for non-thumb fingers
 _DISTAL_RATIO = 1.155
@@ -83,7 +83,7 @@ class BraincoAngleTactileDataset(data.Dataset):
         data_path         : Path to a single episode directory with data.json.
         object_class      : Optional integer label for object classification.
         normalization     : Optional DictConfig(mean, std) for contact stream.
-                            If None, values are normalized to [0, 1] by channel max.
+                            If None, values are scaled by fixed channel maxima.
     """
 
     def __init__(
@@ -135,25 +135,28 @@ class BraincoAngleTactileDataset(data.Dataset):
             tactile_list.append(np.concatenate([lh, rh], axis=0))  # (10, 4)
 
         tactile = np.array(tactile_list, dtype=np.float32)          # (N, 10, 4)
-        # ch2: 65535 (invalid) → -1
+        # Capture validity before baseline subtraction so legitimate negative
+        # deltas are not confused with invalid readings.
         tactile[..., 2][tactile[..., 2] == 65535] = -1.0
+        tactile_valid = tactile >= 0
 
         # Subtract frame-0 as baseline before normalization.
         # Only valid (>= 0) values are subtracted; invalid ch2 (-1) is kept as-is.
         if subtract_baseline:
             baseline = tactile[0].copy()                             # (10, 4)
-            valid = tactile >= 0                                     # (N, 10, 4)
             baseline_valid = baseline >= 0                           # (10, 4)
             # subtract only where both frame and baseline are valid
-            subtract_mask = valid & baseline_valid[np.newaxis]
+            subtract_mask = tactile_valid & baseline_valid[np.newaxis]
             tactile[subtract_mask] -= np.broadcast_to(baseline, tactile.shape)[subtract_mask]
 
-        # Normalize each channel to [0, 1] (invalid ch2 kept as -1 sentinel)
+        # Apply fixed [0, max] scaling to every valid value, including valid
+        # negative baseline deltas, then zero-fill only the original invalids.
         max_vals = np.array(_TACTILE_MAX, dtype=np.float32)         # (4,)
         tactile_norm = tactile.copy()
-        valid_mask = tactile_norm >= 0
-        tactile_norm[valid_mask] = (tactile_norm / max_vals)[valid_mask]
+        tactile_norm[tactile_valid] = (tactile_norm / max_vals)[tactile_valid]
+        tactile_norm[~tactile_valid] = 0.0
         self.tactile_array = tactile_norm                            # (N, 10, 4)
+        self.tactile_valid = tactile_valid
 
         # ── Finger angles: (N, 10, 4) — lh 0-4, rh 5-9 ─────────────────────
         angle_list = []
@@ -192,6 +195,9 @@ class BraincoAngleTactileDataset(data.Dataset):
 
         sample = {
             "joint_contact":  joint_contact,
+            "joint_contact_valid": torch.from_numpy(
+                self.tactile_valid[start:end].copy()
+            ),
             "finger_angles":  finger_angles,
         }
 

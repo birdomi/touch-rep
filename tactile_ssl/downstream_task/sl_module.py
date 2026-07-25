@@ -30,6 +30,7 @@ class SLModule(Module, nn.Module):
         checkpoint_encoder: Optional[str] = None,
         checkpoint_task: Optional[str] = None,
         train_encoder: bool = False,
+        train_input_conv1d: bool = False,
         encoder_type: str = "jepa",
         lora_rank: int = 0,
         lora_alpha: float = 1.0,
@@ -42,6 +43,7 @@ class SLModule(Module, nn.Module):
         self.model_task: nn.Module = model_task
         self.model_encoder: nn.Module = model_encoder
         self.train_encoder: bool = train_encoder
+        self.train_input_conv1d: bool = train_input_conv1d
         self.encoder_type: str = encoder_type
         self.encoder_lr = encoder_lr
         self.task_lr = task_lr
@@ -73,6 +75,28 @@ class SLModule(Module, nn.Module):
             self.model_encoder.requires_grad_(False)
             self.model_encoder.eval()
 
+        # Keep only the temporal input projections trainable while the
+        # Transformer encoder itself is frozen. AngleTransformer exposes its
+        # two PatchEmbed1d modules as direct children (sensor_embed and
+        # angle_embed); only their Conv1d projections are unfrozen, not their
+        # LayerNorms or any Transformer parameters.
+        if self.train_input_conv1d:
+            trainable_input_convs = []
+            for module_name, module in self.model_encoder.named_children():
+                projection = getattr(module, "proj", None)
+                if isinstance(projection, nn.Conv1d):
+                    projection.requires_grad_(True)
+                    trainable_input_convs.append(f"{module_name}.proj")
+            if not trainable_input_convs:
+                raise ValueError(
+                    "train_input_conv1d=True, but the encoder has no direct "
+                    "PatchEmbed1d-style Conv1d projection"
+                )
+            log.info(
+                "Trainable encoder input Conv1d projections: "
+                + ", ".join(trainable_input_convs)
+            )
+
         if lora_rank > 0:
             for name, param in self.model_encoder.named_parameters():
                 if "lora_" in name:
@@ -84,6 +108,10 @@ class SLModule(Module, nn.Module):
 
         self.scheduler_partial = scheduler_cfg
         self.optim_partial = optim_cfg
+
+    def encoder_grad_enabled(self) -> bool:
+        """Return whether any encoder parameter should receive gradients."""
+        return any(param.requires_grad for param in self.model_encoder.parameters())
 
     def load_task(self, checkpoint_task: str):
         try:
@@ -113,7 +141,11 @@ class SLModule(Module, nn.Module):
         else:
             checkpoint_state = checkpoint
 
-        if "jepa" in self.encoder_type:
+        if self.encoder_type == "tactile_jepa_teacher":
+            # SpatiotemporalTactileJEPAModule stores the EMA target directly
+            # under teacher_encoder.*. Do not silently fall back to the student.
+            encoder_keys = ["teacher_encoder"]
+        elif "jepa" in self.encoder_type:
             encoder_keys = ["target_encoder", "context_encoder", "encoder", "model_encoder"]
         elif "dino" in self.encoder_type:
             encoder_keys = [

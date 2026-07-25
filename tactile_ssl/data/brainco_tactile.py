@@ -451,7 +451,7 @@ class BraincoSSLDataset(data.Dataset):
         end = start + self.num_frames_per_window
 
         sensor = torch.from_numpy(self.tactile_array[start:end].copy())  # (W, 10, 4)
-        sensor = sensor / torch.tensor(self.max_values).view(1, 1, -1)  # normalize to [0, 1]
+        sensor = sensor / torch.tensor(self.max_values).view(1, 1, -1)  # fixed channel-max scaling
         fingertip_poses = torch.from_numpy(self.fingertip_rel[start:end].copy())  # (W, 10, 3)
         if self.human_skeleton is not None:
             skeleton_poses = torch.from_numpy(self.human_skeleton[start:end].copy())  # (W, 42, 3)

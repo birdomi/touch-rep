@@ -30,7 +30,7 @@ class NullAwarePatchEmbed(nn.Module):
 
     Standard nn.Linear behaviour for valid channels.
     For channels marked as null (null_mask=True):
-      - their linear contribution is zeroed (caller must zero-fill the input first)
+      - their linear contribution is zeroed after input normalization
       - a learned per-channel null vector is added instead
 
     Args:
@@ -58,7 +58,7 @@ class NullAwarePatchEmbed(nn.Module):
     ) -> torch.Tensor:
         """
         Args:
-            x         : (..., in_chans)        — already zero-filled at invalid positions
+            x         : (..., in_chans)        — normalized and zero-filled at invalid positions
             null_mask : (..., num_null_chans)  — True where the original value was invalid
         Returns:
             (..., embed_dim)
@@ -212,11 +212,11 @@ class BraincoTransformer(SignalTransformer):
         num_null = self.patch_embed.num_null_chans           # 4 (or fewer)
         null_mask = (x[..., :num_null] < 0)                 # (..., num_null_chans) bool
 
-        # Zero-fill invalid positions so normalization is not skewed
-        x = x.clone()
-        x[..., :num_null][null_mask] = 0.0
-
+        # Normalize valid values first, then force invalid positions to zero so
+        # they make no contribution through the linear projection.
         x = self.normalize(x)
+        x = x.clone()
+        x[..., :num_null] = x[..., :num_null].masked_fill(null_mask, 0.0)
         sensor_embed = self.patch_embed(x, null_mask)
         return sensor_embed
 
