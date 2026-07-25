@@ -1,0 +1,33 @@
+# @package _global_
+
+# DINOv2 on the current three frames plus JEPA-style prediction of tactile
+# latents in the next non-overlapping three-frame window.
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_pretraining_all_rope_temp3
+  - _self_
+
+experiment_name: dinov2_prediction_all_pseudo_force_${model_size}_rope_temporal3
+
+wandb:
+  group: dino_prediction_all_pseudo_force_${model_size}_rope_temporal3
+  tags: ["all", "pseudo_force", "4d", "${model_size}", "rope", "temporal3", "prediction"]
+
+data:
+  # Frames 0:3 are DINO/predictor context; frames 3:6 are prediction targets.
+  window_size: 6
+  window_stride: 1
+
+algorithm:
+  _target_: tactile_ssl.algorithm.AngleDINOv2PredictionModule
+  context_window_size: 3
+  temporal_tactile_loss_weight: 1.0
+  prediction_loss_type: smooth_l1
+
+  predictor:
+    _partial_: true
+    _target_: tactile_ssl.model.JEPATokenPredictor
+    predictor_dim: 192
+    depth: 2
+    num_heads: 3
+    mlp_ratio: 4.0
+    dropout: 0.0
