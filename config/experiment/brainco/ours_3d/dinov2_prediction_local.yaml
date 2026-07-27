@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_prediction
+  - _self_
+
+experiment_name: dinov2_prediction_local_all_pseudo_force_${model_size}_rope_temporal3
+
+wandb:
+  group: dino_prediction_local_all_pseudo_force_${model_size}_rope_temporal3
+  tags: ["all", "pseudo_force", "4d", "${model_size}", "rope", "temporal3", "prediction", "local_view"]
+
+algorithm:
+  prediction_context: local
