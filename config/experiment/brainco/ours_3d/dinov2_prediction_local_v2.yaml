@@ -1,0 +1,19 @@
+# @package _global_
+
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_prediction
+  - _self_
+
+experiment_name: dinov2_prediction_local_all_pseudo_force_${model_size}_rope_temporal3
+
+wandb:
+  group: dino_prediction_local_all_pseudo_force_${model_size}_rope_temporal3
+  tags: ["all", "pseudo_force", "4d", "${model_size}", "rope", "temporal3", "prediction", "local_view"]
+
+data:
+  oakinkv2_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/oakinkv2
+  arctic_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/arctic
+  taco_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/taco
+  hot3d_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/hot3d
+algorithm:
+  prediction_context: local
