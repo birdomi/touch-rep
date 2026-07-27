@@ -21,7 +21,7 @@ wandb:
   entity: ryk9012-gwangju-institute-of-science-and-technology
   project: brainco_xyz_slip_detection
   group: all_pseudo_force_rope_temporal3_pretrained
-  tags: ["brainco", "xyz", "slip_detection", "all", "pretrained", "rope", "temporal3", "window9", "mean3"]
+  tags: ["brainco", "xyz", "slip_detection", "all", "pretrained", "rope", "temporal3", "mean3"]
 
 data:
   window_time: 0.03

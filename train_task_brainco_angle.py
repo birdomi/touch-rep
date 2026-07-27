@@ -42,6 +42,76 @@ OmegaConf.register_new_resolver("int_divide",          lambda a, b: a // b)
 OmegaConf.register_new_resolver("capitalize",          lambda s: s.title())
 
 
+# ── sampling ──────────────────────────────────────────────────────────────────
+
+class _EqualClassSampler(data.Sampler[int]):
+    """Sample the same number of items from every class each epoch."""
+
+    def __init__(self, labels: torch.Tensor, generator: torch.Generator):
+        self.generator = generator
+        classes = labels.unique(sorted=True)
+        if len(classes) < 2:
+            raise ValueError(
+                "Balanced sampling requires at least two classes in the train split"
+            )
+        self.class_indices = [
+            torch.nonzero(labels == class_id, as_tuple=False).flatten()
+            for class_id in classes
+        ]
+        self.samples_per_class = len(labels) // len(self.class_indices)
+        self.num_samples = self.samples_per_class * len(self.class_indices)
+
+    def __iter__(self):
+        sampled = []
+        for indices in self.class_indices:
+            if self.samples_per_class <= len(indices):
+                positions = torch.randperm(
+                    len(indices), generator=self.generator
+                )[: self.samples_per_class]
+            else:
+                positions = torch.randint(
+                    len(indices),
+                    (self.samples_per_class,),
+                    generator=self.generator,
+                )
+            sampled.append(indices[positions])
+        epoch_indices = torch.cat(sampled)
+        order = torch.randperm(len(epoch_indices), generator=self.generator)
+        return iter(epoch_indices[order].tolist())
+
+    def __len__(self):
+        return self.num_samples
+
+
+def _balanced_train_loader(
+    train_dataset: data.Dataset,
+    data_cfg: DictConfig,
+    generator: torch.Generator,
+) -> data.DataLoader:
+    """Build a train loader with optional inverse-frequency sampling."""
+    loader_cfg = dict(data_cfg.train_dataloader)
+    if not data_cfg.get("balanced_sampling", False):
+        return data.DataLoader(train_dataset, generator=generator, **loader_cfg)
+
+    labels = torch.tensor(
+        [
+            int(torch.as_tensor(train_dataset[index]["label"]).item())
+            for index in range(len(train_dataset))
+        ],
+        dtype=torch.long,
+    )
+    classes, counts = labels.unique(sorted=True, return_counts=True)
+    sampler = _EqualClassSampler(labels, generator)
+    loader_cfg.pop("shuffle", None)
+    logger.info(
+        "Balanced train sampling enabled: "
+        f"counts={dict(zip(classes.tolist(), counts.tolist()))}, "
+        f"sampled_per_class={sampler.samples_per_class}, "
+        f"samples_per_epoch={len(sampler)}"
+    )
+    return data.DataLoader(train_dataset, sampler=sampler, **loader_cfg)
+
+
 # ── wandb ──────────────────────────────────────────────────────────────────────
 
 def init_wandb(cfg: DictConfig):
@@ -139,7 +209,7 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
 
         print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val")
 
-        train_loader = data.DataLoader(train_dset, generator=g, **dict(data_cfg.train_dataloader))
+        train_loader = _balanced_train_loader(train_dset, data_cfg, g)
         val_loader   = data.DataLoader(val_dset,                **dict(data_cfg.val_dataloader))
         return train_loader, val_loader
 
@@ -238,7 +308,7 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
 
     print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val")
 
-    train_loader = data.DataLoader(train_dset, generator=g, **dict(data_cfg.train_dataloader))
+    train_loader = _balanced_train_loader(train_dset, data_cfg, g)
     val_loader   = data.DataLoader(val_dset,                **dict(data_cfg.val_dataloader))
     return train_loader, val_loader
 
