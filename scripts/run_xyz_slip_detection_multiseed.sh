@@ -61,7 +61,7 @@ RESULT_CSV="${SCRIPT_DIR}/results_xyz_slip_detection_multiseed_${TIMESTAMP}.csv"
 RESULT_MD="${SCRIPT_DIR}/results_xyz_slip_detection_multiseed_${TIMESTAMP}.md"
 mkdir -p "${LOG_DIR}"
 
-echo "model,seed,last_acc,last_f1,best_acc,best_f1,status,log_file" > "${RESULT_CSV}"
+echo "model,seed,last_acc,last_f1,epoch_avg_acc,epoch_avg_f1,status,log_file" > "${RESULT_CSV}"
 
 extract_result() {
     local log_file="$1"
@@ -84,7 +84,7 @@ if "SLIP_EXPERIMENT_FAILED" in text:
 def metric_block(label):
     if aggregate == "1":
         match = re.search(
-            rf"K-FOLD SUMMARY \({label} Epoch\).*?^\s*Mean\s+([\d.]+|nan)\s+([\d.]+|nan)",
+            rf"K-FOLD SUMMARY \({label}\).*?^\s*Mean\s+([\d.]+|nan)\s+([\d.]+|nan)",
             text,
             flags=re.DOTALL | re.MULTILINE,
         )
@@ -95,10 +95,14 @@ def metric_block(label):
         )
     return match.groups() if match else ("", "")
 
-last_acc, last_f1 = metric_block("Last")
-best_acc, best_f1 = metric_block("Best")
-status = "OK" if any((last_acc, last_f1, best_acc, best_f1)) else "INCOMPLETE"
-print(",".join((last_acc, last_f1, best_acc, best_f1, status)))
+if aggregate == "1":
+    last_acc, last_f1 = metric_block("Last Epoch")
+    epoch_avg_acc, epoch_avg_f1 = metric_block("Epoch Average")
+else:
+    last_acc, last_f1 = metric_block("Last")
+    epoch_avg_acc, epoch_avg_f1 = metric_block("EpochAvg")
+status = "OK" if any((last_acc, last_f1, epoch_avg_acc, epoch_avg_f1)) else "INCOMPLETE"
+print(",".join((last_acc, last_f1, epoch_avg_acc, epoch_avg_f1, status)))
 PYEOF
 }
 
@@ -144,9 +148,9 @@ run_experiment() {
     fi
 
     result="$(extract_result "${log_file}" "${RUN_ALL_SPLITS}")"
-    IFS=',' read -r last_acc last_f1 best_acc best_f1 parsed_status <<< "${result}"
+    IFS=',' read -r last_acc last_f1 epoch_avg_acc epoch_avg_f1 parsed_status <<< "${result}"
     [[ "${status}" == "OK" ]] || parsed_status="FAILED"
-    echo "${model_name},${seed},${last_acc},${last_f1},${best_acc},${best_f1},${parsed_status},${log_file}" >> "${RESULT_CSV}"
+    echo "${model_name},${seed},${last_acc},${last_f1},${epoch_avg_acc},${epoch_avg_f1},${parsed_status},${log_file}" >> "${RESULT_CSV}"
 }
 
 for seed in "${SEED_LIST[@]}"; do
@@ -191,26 +195,28 @@ def mean_std(key, model):
 lines = [
     "# XYZ DINOv2 Slip-detection Multi-seed Results",
     "",
-    "| Model | Seed | Last Acc | Last F1 | Best Acc | Best F1 | Status | Log |",
+    "Epoch Avg uses validation epochs 10, 20, 30, 40, and 50.",
+    "",
+    "| Model | Seed | Last Acc | Last F1 | Epoch Avg Acc | Epoch Avg F1 | Status | Log |",
     "| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |",
 ]
 for row in rows:
     lines.append(
         f"| {row['model']} | {row['seed']} | {row['last_acc'] or 'n/a'} | {row['last_f1'] or 'n/a'} | "
-        f"{row['best_acc'] or 'n/a'} | {row['best_f1'] or 'n/a'} | {row['status']} | "
+        f"{row['epoch_avg_acc'] or 'n/a'} | {row['epoch_avg_f1'] or 'n/a'} | {row['status']} | "
         f"`{row['log_file']}` |"
     )
 lines.extend([
     "",
     "## Mean ± sample standard deviation",
     "",
-    "| Model | Last Acc | Last F1 | Best Acc | Best F1 |",
+    "| Model | Last Acc | Last F1 | Epoch Avg Acc | Epoch Avg F1 |",
     "| --- | ---: | ---: | ---: | ---: |",
 ])
 for model in sorted({row["model"] for row in rows}):
     lines.append(
         f"| {model} | {mean_std('last_acc', model)} | {mean_std('last_f1', model)} | "
-        f"{mean_std('best_acc', model)} | {mean_std('best_f1', model)} |"
+        f"{mean_std('epoch_avg_acc', model)} | {mean_std('epoch_avg_f1', model)} |"
     )
 open(markdown_path, "w").write("\n".join(lines) + "\n")
 PYEOF

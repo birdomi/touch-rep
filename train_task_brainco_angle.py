@@ -440,16 +440,21 @@ def train(cfg: DictConfig):
 
     last = getattr(model, "last_val_metrics", {})
     best = getattr(model, "best_val_metrics", {})
+    epoch_avg = getattr(model, "epoch_avg_val_metrics", {})
+    average_epochs = epoch_avg.get("epochs", [])
+    average_epochs_text = ",".join(str(epoch) for epoch in average_epochs) or "none"
 
     print(f"\n{'='*40}")
     print(f"  TRAINING COMPLETE")
     print(f"{'='*40}")
     print(f"  Last  — Acc: {last.get('accuracy', float('nan')):.4f}  F1: {last.get('f1', float('nan')):.4f}")
     print(f"  Best  — Acc: {best.get('accuracy', float('nan')):.4f}  F1: {best.get('f1', float('nan')):.4f}")
+    print(f"  EpochAvg — Acc: {epoch_avg.get('accuracy', float('nan')):.4f}  F1: {epoch_avg.get('f1', float('nan')):.4f}")
+    print(f"  EpochAvg epochs: {average_epochs_text}")
     print(f"{'='*40}\n")
 
     wb.finish()
-    return {"last": last, "best": best}
+    return {"last": last, "best": best, "epoch_avg": epoch_avg}
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -478,7 +483,11 @@ def main(cfg: DictConfig):
         with open_dict(cfg):
             cfg.wandb.id = base_id
 
-        for tag, label in [("last", "Last Epoch"), ("best", "Best Epoch")]:
+        for tag, label in [
+            ("last", "Last Epoch"),
+            ("best", "Best Epoch"),
+            ("epoch_avg", "Epoch Average"),
+        ]:
             print(f"\n{'='*60}\n  K-FOLD SUMMARY ({label})\n{'='*60}")
             print(f"{'Fold':>6}  {'Accuracy':>10}  {'F1 Score':>10}")
             print("-" * 34)

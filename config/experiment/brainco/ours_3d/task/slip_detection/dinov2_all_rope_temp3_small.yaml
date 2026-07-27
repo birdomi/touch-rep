@@ -1,0 +1,28 @@
+# @package _global_
+
+# Small temporal-3 encoder on each nine-frame slip window:
+# 9 frames -> three 3-frame encoder calls -> 3 tokens -> mean classification.
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/dinov2_all_rope_temp3
+  - _self_
+
+ssl_model_size: small
+experiment_name: brainco_xyz_slip_detection_all_rope_temp3_small_pretrained
+
+wandb:
+  group: all_pseudo_force_rope_temporal3_small_pretrained
+  tags: ["brainco", "xyz", "slip_detection", "all", "pretrained", "rope", "temporal3", "small", "window9", "mean3"]
+
+data:
+  window_time: 0.09
+  dataset:
+    config:
+      input_window_frames: 9
+      input_window_stride: 9
+
+task:
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_xyz_temp_small/epoch-0010.ckpt
+  model_encoder:
+    _target_: tactile_ssl.model.angle_small
+  model_task:
+    embed_dim: 384

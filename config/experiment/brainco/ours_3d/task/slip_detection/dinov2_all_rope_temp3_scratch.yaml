@@ -1,8 +1,7 @@
 # @package _global_
 
-# Scratch baseline with the same three-frame temporal encoder architecture as
-# dinov2_all_rope_temp3.yaml. This makes it a like-for-like comparison against
-# the temporal pretrained checkpoint.
+# Scratch baseline with the same three-frame temporal encoder applied to three
+# consecutive chunks in each non-overlapping nine-frame slip window.
 defaults:
   - override /data: brainco_xyz_slip_detection
   - override /task: brainco_xyz_slip_detection
@@ -21,11 +20,20 @@ wandb:
   entity: ryk9012-gwangju-institute-of-science-and-technology
   project: brainco_xyz_slip_detection
   group: all_pseudo_force_rope_temporal3_scratch
-  tags: ["brainco", "xyz", "slip_detection", "all", "scratch", "rope", "temporal3"]
+  tags: ["brainco", "xyz", "slip_detection", "all", "scratch", "rope", "temporal3", "window9", "mean3"]
+
+data:
+  window_time: 0.03
+  dataset:
+    config:
+      input_window_frames: 3
+      input_window_stride: 3
 
 task:
   checkpoint_encoder: ~
   train_encoder: true
+  encoder_lr: 1e-5
+  task_lr: 1e-4
   model_encoder:
     sequence_length: 3
     sensor_time_chunk_size: 1

@@ -18,6 +18,8 @@ task:
   checkpoint_encoder: ~
   encoder_type: tactile_jepa_teacher
   train_encoder: true
+  encoder_lr: 1e-4
+  task_lr: 1e-4
   # Freeze the Transformer but adapt both temporal input Conv1d projections.
   train_input_conv1d: true
   model_encoder:

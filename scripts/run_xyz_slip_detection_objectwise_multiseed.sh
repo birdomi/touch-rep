@@ -47,7 +47,7 @@ LOG_DIR="${SCRIPT_DIR}/logs/xyz_slip_detection_objectwise_${TIMESTAMP}"
 RESULT_CSV="${SCRIPT_DIR}/results_xyz_slip_detection_objectwise_multiseed_${TIMESTAMP}.csv"
 RESULT_MD="${SCRIPT_DIR}/results_xyz_slip_detection_objectwise_multiseed_${TIMESTAMP}.md"
 mkdir -p "${LOG_DIR}"
-echo "model,seed,val_object,train_objects,last_acc,last_f1,best_acc,best_f1,status,log_file" > "${RESULT_CSV}"
+echo "model,seed,val_object,train_objects,last_acc,last_f1,epoch_avg_acc,epoch_avg_f1,status,log_file" > "${RESULT_CSV}"
 
 classes_override() {
     local result="[" obj
@@ -70,8 +70,8 @@ def metric(label):
     match = re.search(rf'{label}\s+[^A-Za-z0-9]*\s+Acc:\s+([\d.]+|nan)\s+F1:\s+([\d.]+|nan)', text)
     return match.groups() if match else ('', '')
 last_acc, last_f1 = metric('Last')
-best_acc, best_f1 = metric('Best')
-print(','.join((last_acc, last_f1, best_acc, best_f1, 'OK' if any((last_acc,last_f1,best_acc,best_f1)) else 'INCOMPLETE')))
+epoch_avg_acc, epoch_avg_f1 = metric('EpochAvg')
+print(','.join((last_acc, last_f1, epoch_avg_acc, epoch_avg_f1, 'OK' if any((last_acc,last_f1,epoch_avg_acc,epoch_avg_f1)) else 'INCOMPLETE')))
 PYEOF
 }
 
@@ -95,9 +95,9 @@ run_experiment() {
     echo "Running ${model}, seed=${seed}, held-out=${val_object} (train: ${train_csv})"
     if XFORMERS_DISABLED=TRUE HYDRA_FULL_ERROR=1 "${cmd[@]}" 2>&1 | tee "${log_file}"; then status=OK; else status=FAILED; echo "SLIP_OBJECTWISE_EXPERIMENT_FAILED" >> "${log_file}"; fi
     result="$(extract_result "${log_file}")"
-    IFS=',' read -r last_acc last_f1 best_acc best_f1 parsed_status <<< "${result}"
+    IFS=',' read -r last_acc last_f1 epoch_avg_acc epoch_avg_f1 parsed_status <<< "${result}"
     [[ "${status}" == OK ]] || parsed_status=FAILED
-    echo "${model},${seed},${val_object},${train_csv},${last_acc},${last_f1},${best_acc},${best_f1},${parsed_status},${log_file}" >> "${RESULT_CSV}"
+    echo "${model},${seed},${val_object},${train_csv},${last_acc},${last_f1},${epoch_avg_acc},${epoch_avg_f1},${parsed_status},${log_file}" >> "${RESULT_CSV}"
 }
 
 for seed in "${SEED_LIST[@]}"; do
@@ -114,12 +114,38 @@ rows = list(csv.DictReader(open(sys.argv[1])))
 groups = defaultdict(list)
 for row in rows:
     if row['status'] == 'OK': groups[(row['val_object'], row['model'])].append(row)
-lines = ['# XYZ Slip-detection Object-wise Multi-seed Results', '', '| Held-out object | Model | n | Best Acc | Best F1 | Last Acc | Last F1 |', '| --- | --- | ---: | ---: | ---: | ---: | ---: |']
+lines = ['# XYZ Slip-detection Object-wise Multi-seed Results', '', 'Epoch Avg uses validation epochs 10, 20, 30, 40, and 50.', '', '| Held-out object | Model | n | Epoch Avg Acc | Epoch Avg F1 | Last Acc | Last F1 |', '| --- | --- | ---: | ---: | ---: | ---: | ---: |']
 for (obj, model), values in sorted(groups.items()):
     def summary(key):
         xs = [float(r[key]) for r in values if r[key] and not math.isnan(float(r[key]))]
         return 'n/a' if not xs else f'{statistics.mean(xs):.4f} ± {(statistics.stdev(xs) if len(xs)>1 else 0):.4f}'
-    lines.append(f'| {obj} | {model} | {len(values)} | {summary("best_acc")} | {summary("best_f1")} | {summary("last_acc")} | {summary("last_f1")} |')
+    lines.append(f'| {obj} | {model} | {len(values)} | {summary("epoch_avg_acc")} | {summary("epoch_avg_f1")} | {summary("last_acc")} | {summary("last_f1")} |')
+
+lines.extend([
+    '',
+    '## Overall',
+    '',
+    '| Model | n object-seed runs | Epoch Avg Acc | Epoch Avg F1 | Last Acc | Last F1 |',
+    '| --- | ---: | ---: | ---: | ---: | ---: |',
+])
+models = sorted({row['model'] for row in rows})
+for model in models:
+    values = [row for row in rows if row['status'] == 'OK' and row['model'] == model]
+    def overall_summary(key):
+        xs = [
+            float(row[key])
+            for row in values
+            if row[key] and not math.isnan(float(row[key]))
+        ]
+        if not xs:
+            return 'n/a'
+        std = statistics.stdev(xs) if len(xs) > 1 else 0.0
+        return f'{statistics.mean(xs):.4f} ± {std:.4f}'
+    lines.append(
+        f'| {model} | {len(values)} | {overall_summary("epoch_avg_acc")} | '
+        f'{overall_summary("epoch_avg_f1")} | {overall_summary("last_acc")} | '
+        f'{overall_summary("last_f1")} |'
+    )
 open(sys.argv[2], 'w').write('\n'.join(lines) + '\n')
 PYEOF
 
