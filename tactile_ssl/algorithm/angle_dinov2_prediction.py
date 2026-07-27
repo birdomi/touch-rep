@@ -18,6 +18,7 @@ class AngleDINOv2PredictionModule(AngleDinov2Module):
         context_window_size: int = 3,
         temporal_tactile_loss_weight: float = 1.0,
         prediction_loss_type: str = "smooth_l1",
+        prediction_context: str = "full",
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -36,6 +37,10 @@ class AngleDINOv2PredictionModule(AngleDinov2Module):
             raise ValueError(
                 "prediction_loss_type must be 'smooth_l1' or 'cosine'"
             )
+        if prediction_context not in {"full", "global", "local"}:
+            raise ValueError(
+                "prediction_context must be 'full', 'global', or 'local'"
+            )
 
         self.context_window_size = int(context_window_size)
         self.required_window_size = 2 * self.context_window_size
@@ -43,6 +48,7 @@ class AngleDINOv2PredictionModule(AngleDinov2Module):
             temporal_tactile_loss_weight
         )
         self.prediction_loss_type = prediction_loss_type
+        self.prediction_context = prediction_context
         self.num_pos_tokens = int(encoder.pos_in_dim)
         self.num_tactile_tokens = int(encoder.in_dim)
         self.num_token_positions = (
@@ -97,27 +103,80 @@ class AngleDINOv2PredictionModule(AngleDinov2Module):
         future_sensor: torch.Tensor,
         future_pos: torch.Tensor,
     ) -> torch.Tensor:
-        student_tokens = self.student_encoder_dict[
-            "backbone"
-        ].forward_features(current_sensor, current_pos)["x_norm_patchtokens"]
+        batch_size = current_sensor.shape[0]
+        backbone = self.student_encoder_dict["backbone"]
+        if self.prediction_context == "local":
+            _, local_masks, _, _, pos_local_masks, _ = self.sample_masks(
+                current_sensor
+            )
+            student_tokens = backbone.forward_features(
+                current_sensor,
+                current_pos,
+                masks=local_masks,
+                mask_type="tubelet",
+                pos_masks=pos_local_masks,
+            )["x_norm_patchtokens"]
+            context_indices = torch.cat(
+                (
+                    pos_local_masks.flatten(0, 1),
+                    local_masks.flatten(0, 1) + self.num_pos_tokens,
+                ),
+                dim=1,
+            )
+            prediction_batch_size = batch_size * self.num_local_masks
+        elif self.prediction_context == "global":
+            (
+                global_masks,
+                _,
+                _,
+                pos_global_masks,
+                _,
+                _,
+            ) = self.sample_masks(current_sensor)
+            global_masks = global_masks[:1]
+            pos_global_masks = pos_global_masks[:1]
+            student_tokens = backbone.forward_features(
+                current_sensor,
+                current_pos,
+                masks=global_masks,
+                mask_type="tubelet",
+                pos_masks=pos_global_masks,
+            )["x_norm_patchtokens"]
+            context_indices = torch.cat(
+                (
+                    pos_global_masks.flatten(0, 1),
+                    global_masks.flatten(0, 1) + self.num_pos_tokens,
+                ),
+                dim=1,
+            )
+            prediction_batch_size = batch_size
+        else:
+            student_tokens = backbone.forward_features(
+                current_sensor, current_pos
+            )["x_norm_patchtokens"]
+            context_indices = torch.arange(
+                self.num_token_positions,
+                device=current_sensor.device,
+                dtype=torch.long,
+            ).expand(batch_size, -1)
+            prediction_batch_size = batch_size
+
         with torch.no_grad():
             future_tokens = self.teacher_encoder_dict[
                 "backbone"
             ].forward_features(future_sensor, future_pos)["x_norm_patchtokens"]
             tactile_targets = future_tokens[:, self.num_pos_tokens :]
+            if self.prediction_context == "local":
+                tactile_targets = tactile_targets.repeat(
+                    self.num_local_masks, 1, 1
+                )
 
-        batch_size = current_sensor.shape[0]
-        context_indices = torch.arange(
-            self.num_token_positions,
-            device=current_sensor.device,
-            dtype=torch.long,
-        ).expand(batch_size, -1)
         tactile_indices = torch.arange(
             self.num_pos_tokens,
             self.num_token_positions,
             device=current_sensor.device,
             dtype=torch.long,
-        ).expand(batch_size, -1)
+        ).expand(prediction_batch_size, -1)
         predictions = self.temporal_predictor(
             student_tokens, context_indices, tactile_indices
         )

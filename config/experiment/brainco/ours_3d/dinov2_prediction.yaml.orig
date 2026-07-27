@@ -20,7 +20,7 @@ data:
 algorithm:
   _target_: tactile_ssl.algorithm.AngleDINOv2PredictionModule
   context_window_size: 3
-  temporal_tactile_loss_weight: 10.0
+  temporal_tactile_loss_weight: 1.0
   prediction_loss_type: smooth_l1
 
   predictor:
