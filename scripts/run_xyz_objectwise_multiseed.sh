@@ -18,6 +18,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
 cd "${PROJECT_ROOT}"
 
+PRETRAINED_EXPERIMENT="${PRETRAINED_EXPERIMENT:-brainco/ours_3d/task/grasp_prediction/dinov2_all_rope}"
+SCRATCH_EXPERIMENT="${SCRATCH_EXPERIMENT:-brainco/ours_3d/task/grasp_prediction/dinov2_all_rope_scratch}"
 SEEDS_STRING="${SEEDS:-0 1 2}"
 read -r -a SEED_LIST <<< "${SEEDS_STRING}"
 RUN_PRETRAINED="${RUN_PRETRAINED:-1}"
@@ -48,7 +50,7 @@ RESULT_MD="${SCRIPT_DIR}/results_xyz_objectwise_multiseed_${TIMESTAMP}.md"
 MARKER_FILE=$(mktemp)
 trap 'rm -f "${MARKER_FILE}"' EXIT
 
-echo "model,seed,val_object,train_objects,last_acc,last_f1,best_acc,best_f1,status,source_csv,log_file" > "${RESULT_CSV}"
+echo "model,seed,val_object,train_objects,last_acc,last_f1,epoch_avg_acc,epoch_avg_f1,status,source_csv,log_file" > "${RESULT_CSV}"
 
 run_model() {
     local model_name="$1"
@@ -85,7 +87,7 @@ with open(source_path, newline="") as source_file, open(result_path, "a", newlin
     reader = csv.DictReader(source_file)
     fields = [
         "model", "seed", "val_object", "train_objects", "last_acc", "last_f1",
-        "best_acc", "best_f1", "status", "source_csv", "log_file",
+        "epoch_avg_acc", "epoch_avg_f1", "status", "source_csv", "log_file",
     ]
     writer = csv.DictWriter(result_file, fieldnames=fields)
     for row in reader:
@@ -96,8 +98,8 @@ with open(source_path, newline="") as source_file, open(result_path, "a", newlin
             "train_objects": row["train_objects"],
             "last_acc": row["last_acc"],
             "last_f1": row["last_f1"],
-            "best_acc": row["best_acc"],
-            "best_f1": row["best_f1"],
+            "epoch_avg_acc": row["epoch_avg_acc"],
+            "epoch_avg_f1": row["epoch_avg_f1"],
             "status": row["status"],
             "source_csv": source_path,
             "log_file": row["log_file"],
@@ -107,10 +109,10 @@ PYEOF
 
 for seed in "${SEED_LIST[@]}"; do
     if [[ "${RUN_PRETRAINED}" == "1" ]]; then
-        run_model "pretrained" "brainco/ours_3d/task/grasp_prediction/dinov2_all_rope" "${seed}"
+        run_model "pretrained" "${PRETRAINED_EXPERIMENT}" "${seed}"
     fi
     if [[ "${RUN_SCRATCH}" == "1" ]]; then
-        run_model "scratch" "brainco/ours_3d/task/grasp_prediction/dinov2_all_rope_scratch" "${seed}"
+        run_model "scratch" "${SCRATCH_EXPERIMENT}" "${seed}"
     fi
 done
 
@@ -145,21 +147,22 @@ lines = [
     "",
     f"Seeds: {', '.join(seeds)}",
     "",
-    "Best validation epoch metrics, reported as mean ± sample standard deviation.",
+    "Validation metrics averaged over epochs 10, 20, 30, 40, and 50, "
+    "then reported across seeds as mean ± sample standard deviation.",
     "",
-    "| Held-out object | Model | n | Best Acc | Best F1 | Last Acc | Last F1 |",
+    "| Held-out object | Model | n | Epoch Avg Acc | Epoch Avg F1 | Last Acc | Last F1 |",
     "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
 ]
 for obj in objects:
     for model in models:
         values = groups[(model, obj)]
-        best_acc, best_acc_std = mean_std([float(r["best_acc"]) for r in values])
-        best_f1, best_f1_std = mean_std([float(r["best_f1"]) for r in values])
+        epoch_avg_acc, epoch_avg_acc_std = mean_std([float(r["epoch_avg_acc"]) for r in values])
+        epoch_avg_f1, epoch_avg_f1_std = mean_std([float(r["epoch_avg_f1"]) for r in values])
         last_acc, last_acc_std = mean_std([float(r["last_acc"]) for r in values])
         last_f1, last_f1_std = mean_std([float(r["last_f1"]) for r in values])
         lines.append(
-            f"| {obj} | {model} | {len(values)} | {best_acc} ± {best_acc_std} | "
-            f"{best_f1} ± {best_f1_std} | {last_acc} ± {last_acc_std} | "
+            f"| {obj} | {model} | {len(values)} | {epoch_avg_acc} ± {epoch_avg_acc_std} | "
+            f"{epoch_avg_f1} ± {epoch_avg_f1_std} | {last_acc} ± {last_acc_std} | "
             f"{last_f1} ± {last_f1_std} |"
         )
 
@@ -167,13 +170,13 @@ lines.extend([
     "",
     "## Overall",
     "",
-    "| Model | n object-seed runs | Best Acc | Best F1 | Last Acc | Last F1 |",
+    "| Model | n object-seed runs | Epoch Avg Acc | Epoch Avg F1 | Last Acc | Last F1 |",
     "| --- | ---: | ---: | ---: | ---: | ---: |",
 ])
 for model in models:
     values = [row for row in rows if row["model"] == model]
     metrics = []
-    for key in ("best_acc", "best_f1", "last_acc", "last_f1"):
+    for key in ("epoch_avg_acc", "epoch_avg_f1", "last_acc", "last_f1"):
         mean, std = mean_std([float(row[key]) for row in values])
         metrics.append(f"{mean} ± {std}")
     lines.append(f"| {model} | {len(values)} | " + " | ".join(metrics) + " |")

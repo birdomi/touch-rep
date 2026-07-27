@@ -87,9 +87,9 @@ def extract(label):
     return match.groups() if match else ("", "")
 
 last_acc, last_f1 = extract("Last")
-best_acc, best_f1 = extract("Best")
-status = "OK" if any((last_acc, last_f1, best_acc, best_f1)) else "INCOMPLETE"
-print(",".join((last_acc, last_f1, best_acc, best_f1, status)))
+epoch_avg_acc, epoch_avg_f1 = extract("EpochAvg")
+status = "OK" if any((last_acc, last_f1, epoch_avg_acc, epoch_avg_f1)) else "INCOMPLETE"
+print(",".join((last_acc, last_f1, epoch_avg_acc, epoch_avg_f1, status)))
 PYEOF
 }
 
@@ -100,14 +100,14 @@ echo "  log dir:    ${LOG_DIR}"
 echo "  summary:    ${SUMMARY_TXT}"
 echo ""
 
-echo "val_object,train_objects,last_acc,last_f1,best_acc,best_f1,status,log_file" > "${SUMMARY_CSV}"
+echo "val_object,train_objects,last_acc,last_f1,epoch_avg_acc,epoch_avg_f1,status,log_file" > "${SUMMARY_CSV}"
 
 {
     echo "Object-wise DINOv2 XYZ Grasp Results (${TIMESTAMP})"
     echo "Experiment: ${EXPERIMENT}"
     echo ""
     printf "%-10s  %-26s  %-8s  %-8s  %-8s  %-8s  %s\n" \
-        "ValObject" "TrainObjects" "LastAcc" "LastF1" "BestAcc" "BestF1" "Status"
+        "ValObject" "TrainObjects" "LastAcc" "LastF1" "AvgAcc" "AvgF1" "Status"
     printf "%-10s  %-26s  %-8s  %-8s  %-8s  %-8s  %s\n" \
         "---------" "--------------------------" "--------" "--------" "--------" "--------" "------"
 } | tee "${SUMMARY_TXT}"
@@ -152,11 +152,11 @@ for val_obj in "${OBJECTS[@]}"; do
     fi
 
     result="$(extract_result "${log_file}")"
-    IFS=',' read -r last_acc last_f1 best_acc best_f1 status <<< "${result}"
+    IFS=',' read -r last_acc last_f1 epoch_avg_acc epoch_avg_f1 status <<< "${result}"
     printf "%-10s  %-26s  %-8s  %-8s  %-8s  %-8s  %s\n" \
         "${val_obj}" "${train_objects_csv}" "${last_acc:-n/a}" "${last_f1:-n/a}" \
-        "${best_acc:-n/a}" "${best_f1:-n/a}" "${status}" | tee -a "${SUMMARY_TXT}"
-    echo "${val_obj},${train_objects_csv},${last_acc},${last_f1},${best_acc},${best_f1},${status},${log_file}" >> "${SUMMARY_CSV}"
+        "${epoch_avg_acc:-n/a}" "${epoch_avg_f1:-n/a}" "${status}" | tee -a "${SUMMARY_TXT}"
+    echo "${val_obj},${train_objects_csv},${last_acc},${last_f1},${epoch_avg_acc},${epoch_avg_f1},${status},${log_file}" >> "${SUMMARY_CSV}"
 done
 
 python3 - "${SUMMARY_CSV}" <<'PYEOF' | tee -a "${SUMMARY_TXT}"
@@ -180,13 +180,13 @@ def values(key):
     return result
 
 print("\nAggregate over held-out objects")
-for prefix in ("last", "best"):
+for prefix, label in (("last", "Last"), ("epoch_avg", "Epoch Avg (10,20,30,40,50)")):
     accs, f1s = values(f"{prefix}_acc"), values(f"{prefix}_f1")
     if not accs or not f1s:
-        print(f"  {prefix.title()}: n/a")
+        print(f"  {label}: n/a")
         continue
     print(
-        f"  {prefix.title()}: MeanAcc={statistics.mean(accs):.4f} "
+        f"  {label}: MeanAcc={statistics.mean(accs):.4f} "
         f"StdAcc={statistics.pstdev(accs) if len(accs) > 1 else 0.0:.4f} "
         f"MeanF1={statistics.mean(f1s):.4f} "
         f"StdF1={statistics.pstdev(f1s) if len(f1s) > 1 else 0.0:.4f}"

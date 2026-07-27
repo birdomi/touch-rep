@@ -53,11 +53,11 @@ text = open(sys.argv[1]).read()
 if "ID_EXPERIMENT_FAILED" in text:
     print(",,,,FAILED"); raise SystemExit
 def metric(label):
-    m = re.search(rf"K-FOLD SUMMARY \({label} Epoch\).*?^\s*Mean\s+([\d.]+|nan)\s+([\d.]+|nan)", text, re.DOTALL | re.MULTILINE)
+    m = re.search(rf"K-FOLD SUMMARY \({label}\).*?^\s*Mean\s+([\d.]+|nan)\s+([\d.]+|nan)", text, re.DOTALL | re.MULTILINE)
     return m.groups() if m else ("", "")
-last_acc, last_f1 = metric("Last")
-best_acc, best_f1 = metric("Best")
-print(",".join((last_acc, last_f1, best_acc, best_f1, "OK" if any((last_acc,last_f1,best_acc,best_f1)) else "INCOMPLETE")))
+last_acc, last_f1 = metric("Last Epoch")
+epoch_avg_acc, epoch_avg_f1 = metric("Epoch Average")
+print(",".join((last_acc, last_f1, epoch_avg_acc, epoch_avg_f1, "OK" if any((last_acc,last_f1,epoch_avg_acc,epoch_avg_f1)) else "INCOMPLETE")))
 PYEOF
 }
 
@@ -69,14 +69,14 @@ run_id() {
     local cmd=(python train_task_brainco_angle.py "+experiment=${experiment}" "seed=${seed}" "+split_seed=${SPLIT_SEED}" "experiment_name=${run_name}" "wandb.group=xyz_grasp_id_${exp_name}_${model}_multiseed" "wandb.tags=[brainco,xyz,dinov2,grasp_prediction,id,${model},multiseed,seed_${seed}]" "${EXTRA_OVERRIDES[@]}" --all_split --num_folds "${NUM_FOLDS}")
     echo "[ID] model=${model}, seed=${seed}"
     if XFORMERS_DISABLED=TRUE HYDRA_FULL_ERROR=1 "${cmd[@]}" 2>&1 | tee "${log_file}"; then status=OK; else status=FAILED; echo ID_EXPERIMENT_FAILED >> "${log_file}"; fi
-    IFS=',' read -r last_acc last_f1 best_acc best_f1 parsed_status <<< "$(extract_result "${log_file}")"
+    IFS=',' read -r last_acc last_f1 epoch_avg_acc epoch_avg_f1 parsed_status <<< "$(extract_result "${log_file}")"
     [[ "${status}" == OK ]] || parsed_status=FAILED
-    echo "${model},${seed},${last_acc},${last_f1},${best_acc},${best_f1},${parsed_status},${log_file}" >> "${ID_CSV}"
+    echo "${model},${seed},${last_acc},${last_f1},${epoch_avg_acc},${epoch_avg_f1},${parsed_status},${log_file}" >> "${ID_CSV}"
 }
 
 echo "XYZ grasp-prediction multi-seed: seeds=${SEEDS_STRING}; ID=${RUN_ID}; object-wise=${RUN_OBJECTWISE}"
 if [[ "${RUN_ID}" == 1 ]]; then
-    echo "model,seed,last_acc,last_f1,best_acc,best_f1,status,log_file" > "${ID_CSV}"
+    echo "model,seed,last_acc,last_f1,epoch_avg_acc,epoch_avg_f1,status,log_file" > "${ID_CSV}"
     for seed in "${SEED_LIST[@]}"; do
         [[ "${RUN_PRETRAINED}" == 1 ]] && run_id pretrained "${PRETRAINED_EXPERIMENT}" "${seed}"
         [[ "${RUN_SCRATCH}" == 1 ]] && run_id scratch "${SCRATCH_EXPERIMENT}" "${seed}"
@@ -84,19 +84,24 @@ if [[ "${RUN_ID}" == 1 ]]; then
     python3 - "${ID_CSV}" "${ID_MD}" <<'PYEOF'
 import csv, statistics, sys
 rows = list(csv.DictReader(open(sys.argv[1])))
-lines = ["# XYZ Grasp Prediction: ID Multi-seed Results", "", "| Model | Seed | Last Acc | Last F1 | Best Acc | Best F1 | Status |", "| --- | ---: | ---: | ---: | ---: | ---: | --- |"]
-for r in rows: lines.append(f"| {r['model']} | {r['seed']} | {r['last_acc'] or 'n/a'} | {r['last_f1'] or 'n/a'} | {r['best_acc'] or 'n/a'} | {r['best_f1'] or 'n/a'} | {r['status']} |")
-lines += ["", "## Mean ± sample standard deviation", "", "| Model | Last Acc | Last F1 | Best Acc | Best F1 |", "| --- | ---: | ---: | ---: | ---: |"]
+lines = ["# XYZ Grasp Prediction: ID Multi-seed Results", "", "Epoch Avg uses validation epochs 10, 20, 30, 40, and 50.", "", "| Model | Seed | Last Acc | Last F1 | Epoch Avg Acc | Epoch Avg F1 | Status |", "| --- | ---: | ---: | ---: | ---: | ---: | --- |"]
+for r in rows: lines.append(f"| {r['model']} | {r['seed']} | {r['last_acc'] or 'n/a'} | {r['last_f1'] or 'n/a'} | {r['epoch_avg_acc'] or 'n/a'} | {r['epoch_avg_f1'] or 'n/a'} | {r['status']} |")
+lines += ["", "## Mean ± sample standard deviation", "", "| Model | Last Acc | Last F1 | Epoch Avg Acc | Epoch Avg F1 |", "| --- | ---: | ---: | ---: | ---: |"]
 for model in sorted({r['model'] for r in rows}):
     def stat(key):
         vals = [float(r[key]) for r in rows if r['model'] == model and r['status'] == 'OK' and r[key] not in ('', 'nan')]
         return 'n/a' if not vals else f"{statistics.mean(vals):.4f} ± {(statistics.stdev(vals) if len(vals)>1 else 0):.4f}"
-    lines.append(f"| {model} | {stat('last_acc')} | {stat('last_f1')} | {stat('best_acc')} | {stat('best_f1')} |")
+    lines.append(f"| {model} | {stat('last_acc')} | {stat('last_f1')} | {stat('epoch_avg_acc')} | {stat('epoch_avg_f1')} |")
 open(sys.argv[2], 'w').write('\n'.join(lines) + '\n')
 PYEOF
     echo "ID results: ${ID_MD}"
 fi
 
 if [[ "${RUN_OBJECTWISE}" == 1 ]]; then
-    SEEDS="${SEEDS_STRING}" RUN_PRETRAINED="${RUN_PRETRAINED}" RUN_SCRATCH="${RUN_SCRATCH}" bash scripts/run_xyz_objectwise_multiseed.sh -- "${EXTRA_OVERRIDES[@]}"
+    PRETRAINED_EXPERIMENT="${PRETRAINED_EXPERIMENT}" \
+        SCRATCH_EXPERIMENT="${SCRATCH_EXPERIMENT}" \
+        SEEDS="${SEEDS_STRING}" \
+        RUN_PRETRAINED="${RUN_PRETRAINED}" \
+        RUN_SCRATCH="${RUN_SCRATCH}" \
+        bash scripts/run_xyz_objectwise_multiseed.sh -- "${EXTRA_OVERRIDES[@]}"
 fi

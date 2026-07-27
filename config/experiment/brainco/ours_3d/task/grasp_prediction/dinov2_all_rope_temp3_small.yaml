@@ -1,0 +1,21 @@
+# @package _global_
+
+# Small temporal-3 encoder on the standard 30-frame grasp window:
+# 30 frames -> ten 3-frame encoder calls -> 10 tokens -> mean classification.
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/dinov2_all_rope_temp3
+  - _self_
+
+ssl_model_size: small
+experiment_name: brainco_xyz_grasp_prediction_all_rope_temp3_small_pretrained
+
+wandb:
+  group: all_pseudo_force_rope_temporal3_small_pretrained
+  tags: ["brainco", "xyz", "grasp_prediction", "all", "pretrained", "rope", "temporal3", "small", "window30", "mean10"]
+
+task:
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_xyz_temp_small/epoch-0010.ckpt
+  model_encoder:
+    _target_: tactile_ssl.model.angle_small
+  model_task:
+    embed_dim: 384

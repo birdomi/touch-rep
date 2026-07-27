@@ -2,10 +2,10 @@
 
 Each episode's ``data.json`` contains one or more inclusive slip intervals in
 ``slip_start_frame_index`` and ``slip_end_frame_index``. This adapter makes
-non-overlapping three-frame samples ``[t, t+1, t+2]`` and uses the final
-frame's label. At a final partial window, the final valid frame is repeated.
-Windows touching the configured transition margins immediately before slip
-onset or immediately after slip offset are discarded.
+fixed-length samples using the configured window length and stride, and uses
+the final frame's label. At a final partial window, the final valid frame is
+repeated. Windows touching the configured transition margins immediately
+before slip onset or immediately after slip offset are discarded.
 """
 
 import json
@@ -137,10 +137,8 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
         exclude_after_slip_end_frames = int(
             config.get("exclude_after_slip_end_frames", 0)
         )
-        if input_window_frames != 3:
-            raise ValueError(
-                "BraincoXYZSlipDetectionDataset requires input_window_frames=3"
-            )
+        if input_window_frames <= 0:
+            raise ValueError("input_window_frames must be positive")
         if input_window_stride < input_window_frames:
             raise ValueError(
                 "input_window_stride must be at least input_window_frames "

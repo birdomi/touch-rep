@@ -31,7 +31,7 @@ class BraincoAngleGraspSLModule(BraincoGraspDetectionSLModule):
             mask          : optional (B, W) bool
 
         Returns:
-            window_tokens : (B, W, embed_dim)
+            window_tokens : (B, num_encoder_windows, embed_dim)
         """
         B, W, N, C = joint_contact.shape
         encoder_sequence_length = int(
@@ -41,22 +41,29 @@ class BraincoAngleGraspSLModule(BraincoGraspDetectionSLModule):
         if encoder_sequence_length == 1:
             # Frame-wise encoder: independently encode each downstream frame,
             # then let the task probe pool over the resulting window tokens.
-            xs = joint_contact.view(B * W, 1, N, C)
-            pos = position_input.view(
+            xs = joint_contact.reshape(B * W, 1, N, C)
+            pos = position_input.reshape(
                 B * W, 1, position_input.shape[2], position_input.shape[3]
             )
-            output_batch_size, output_window_size = B, W
-        elif W == encoder_sequence_length:
-            # Temporal pretraining encoder: preserve all input frames so its
-            # Conv1d temporal patch (e.g. T=3, chunk=3) is applied exactly as
-            # it was during pretraining. One temporal patch becomes one task
-            # token per sample.
-            xs, pos = joint_contact, position_input
-            output_batch_size, output_window_size = B, 1
+            num_encoder_windows = W
+        elif W % encoder_sequence_length == 0:
+            # Reuse the temporal encoder on consecutive, non-overlapping
+            # windows. For example, a nine-frame downstream sample with a
+            # three-frame pretrained encoder produces three task tokens.
+            num_encoder_windows = W // encoder_sequence_length
+            xs = joint_contact.reshape(
+                B * num_encoder_windows, encoder_sequence_length, N, C
+            )
+            pos = position_input.reshape(
+                B * num_encoder_windows,
+                encoder_sequence_length,
+                position_input.shape[2],
+                position_input.shape[3],
+            )
         else:
             raise ValueError(
-                "Downstream window length must match the temporal encoder "
-                f"sequence_length: got W={W}, "
+                "Downstream window length must be divisible by the temporal "
+                f"encoder sequence_length: got W={W}, "
                 f"encoder sequence_length={encoder_sequence_length}"
             )
 
@@ -67,9 +74,23 @@ class BraincoAngleGraspSLModule(BraincoGraspDetectionSLModule):
             x_tokens = out["x_tokens"]                             # (B*W, reg+N, D)
 
         pooled = self.pooler(x_tokens)
-        window_tokens = pooled.view(output_batch_size, output_window_size, -1)
+        window_tokens = pooled.reshape(B, num_encoder_windows, -1)
 
         if mask is not None:
+            if mask.ndim != 2 or mask.shape[0] != B:
+                raise ValueError(
+                    f"Expected mask shape (B, W), got {tuple(mask.shape)}"
+                )
+            if mask.shape[1] == W:
+                mask = mask.reshape(
+                    B, num_encoder_windows, encoder_sequence_length
+                ).all(dim=-1)
+            elif mask.shape[1] != num_encoder_windows:
+                raise ValueError(
+                    "Mask length must match either the input frame count or "
+                    f"the encoder-window count: got {mask.shape[1]}, expected "
+                    f"{W} or {num_encoder_windows}"
+                )
             window_tokens = window_tokens * mask.unsqueeze(-1).float()
 
         return window_tokens

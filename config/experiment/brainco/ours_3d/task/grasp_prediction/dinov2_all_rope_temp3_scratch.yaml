@@ -8,7 +8,9 @@ experiment_name: brainco_xyz_grasp_prediction_all_rope_temp3_scratch
 
 wandb:
   group: all_pseudo_force_rope_temporal3_scratch
-  tags: ["brainco", "xyz", "grasp_prediction", "all", "scratch", "rope", "temporal3"]
+  tags: ["brainco", "xyz", "grasp_prediction", "all", "scratch", "rope", "temporal3", "window30", "mean10"]
 
 task:
   checkpoint_encoder: null
+  encoder_lr: 1e-5
+  task_lr: 1e-4

@@ -1,7 +1,8 @@
 # @package _global_
 
-# Fine-tune the three-frame temporal DINO XYZ encoder on the three-frame,
-# non-overlapping slip-detection windows.
+# Apply the pretrained three-frame temporal DINO XYZ encoder three times to
+# each non-overlapping nine-frame slip window. MeanPoolProbe averages the
+# resulting three tokens before classification.
 defaults:
   - override /data: brainco_xyz_slip_detection
   - override /task: brainco_xyz_slip_detection
@@ -20,12 +21,21 @@ wandb:
   entity: ryk9012-gwangju-institute-of-science-and-technology
   project: brainco_xyz_slip_detection
   group: all_pseudo_force_rope_temporal3_pretrained
-  tags: ["brainco", "xyz", "slip_detection", "all", "pretrained", "rope", "temporal3"]
+  tags: ["brainco", "xyz", "slip_detection", "all", "pretrained", "rope", "temporal3", "window9", "mean3"]
+
+data:
+  window_time: 0.03
+  dataset:
+    config:
+      input_window_frames: 3
+      input_window_stride: 3
 
 task:
   # Pretrained by ours_3d/dinov2_pretraining_all_rope_temp3.yaml.
-  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_xyz_temp/epoch-0100.ckpt
+  checkpoint_encoder: ${paths.encoder_checkpoint_root}/dinov2_xyz_temp/epoch-0060-global.ckpt
   train_encoder: true
+  encoder_lr: 1e-5
+  task_lr: 1e-4
   model_encoder:
     sequence_length: 3
     sensor_time_chunk_size: 1

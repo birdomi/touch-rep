@@ -22,7 +22,7 @@ train_data_budget: 1.0
 val_data_budget: 1.0
 
 # BraincoSSLDataset still needs these values while loading tactile/FK data.
-# The slip adapter constructs its own non-overlapping three-frame windows.
+# The slip adapter constructs its own configurable non-overlapping windows.
 window_time: 0.03
 window_overlap: 0.0
 interpolating_freq: 100
@@ -37,13 +37,12 @@ dataset:
     align_xyz_to_npz: true
     input_window_frames: 3
     input_window_stride: 3
-    # Drop any window touching the ambiguous transition region immediately
-    # before slip onset or immediately after slip offset.
-    exclude_before_slip_start_frames: 10
-    exclude_after_slip_end_frames: 10
+    # Keep windows adjacent to slip onset and offset.
+    exclude_before_slip_start_frames: 0
+    exclude_after_slip_end_frames: 0
     # Object folders to include. Keep this explicit so ID and leave-one-object-out
     # experiments always use the same three-object universe.
-    classes: [slip_box_move, slip_case_move]
+    classes: [slip_box_move, slip_case_move, slip_doll_move, slip_plastic_move, slip_pot_move]
   data_path: ${paths.data_root}/brainco/downstream/slip_detection_move
   brainco_urdf_path: ${paths.data_root}/brainco/urdf
 

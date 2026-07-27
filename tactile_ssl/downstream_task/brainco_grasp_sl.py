@@ -274,6 +274,7 @@ class BraincoGraspDetectionSLModule(SLModule):
         encoder_warmup_fine_tune_sensor_shallow_blocks: Optional[int] = None,
         log_confusion_matrix_image: bool = True,
         best_val_metric: str = "accuracy",
+        val_average_epochs: Sequence[int] = (10, 20, 30, 40, 50),
         class_weights: Optional[Sequence[float]] = None,
     ):
         super().__init__(
@@ -302,6 +303,11 @@ class BraincoGraspDetectionSLModule(SLModule):
                 f"got {best_val_metric!r}"
             )
         self.best_val_metric = best_val_metric
+        self.val_average_epochs = tuple(
+            sorted({int(epoch) for epoch in val_average_epochs if int(epoch) > 0})
+        )
+        if not self.val_average_epochs:
+            raise ValueError("val_average_epochs must contain at least one positive epoch")
         self._encoder_warmup_mode = None
         self._encoder_warmup_epoch_idx = 0
         if self.encoder_warmup_fine_tune_sensor_epochs < 0:
@@ -346,6 +352,8 @@ class BraincoGraspDetectionSLModule(SLModule):
         self.val_labels = []
         self.val_failed_samples = []   # list of {sensor, label, pred}
         self.last_val_metrics = {}
+        self.val_metrics_by_epoch = {}
+        self.epoch_avg_val_metrics = {}
         self.best_val_metrics = {}
         self._best_state_dict = None   # saved when the selected validation metric peaks
         self._in_test = False          # flag: running test eval loop
@@ -580,6 +588,26 @@ class BraincoGraspDetectionSLModule(SLModule):
             confusion_matrix_image = Image.open(img_buf)
 
         self.last_val_metrics = {"accuracy": float(accuracy), "f1": float(f1)}
+        if trainer_instance is not None:
+            epoch = int(trainer_instance.current_epoch)
+            self.val_metrics_by_epoch[epoch] = dict(self.last_val_metrics)
+            average_epochs = sorted(
+                recorded_epoch
+                for recorded_epoch in self.val_metrics_by_epoch
+                if recorded_epoch in self.val_average_epochs
+            )
+            if tuple(average_epochs) == self.val_average_epochs:
+                self.epoch_avg_val_metrics = {
+                    "accuracy": float(np.mean([
+                        self.val_metrics_by_epoch[recorded_epoch]["accuracy"]
+                        for recorded_epoch in average_epochs
+                    ])),
+                    "f1": float(np.mean([
+                        self.val_metrics_by_epoch[recorded_epoch]["f1"]
+                        for recorded_epoch in average_epochs
+                    ])),
+                    "epochs": average_epochs,
+                }
         selected_metric = self.last_val_metrics[self.best_val_metric]
         if selected_metric > self.best_val_metrics.get(self.best_val_metric, -1.0):
             self.best_val_metrics = {"accuracy": float(accuracy), "f1": float(f1)}

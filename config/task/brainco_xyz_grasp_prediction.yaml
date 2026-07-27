@@ -17,7 +17,7 @@ wandb:
   tags: ["brainco", "xyz", "grasp_prediction"]
 
 trainer:
-  max_epochs: 100
+  max_epochs: 50
   validation_frequency: 5
   sanity_validate: true
   save_checkpoint_dir: ${paths.output_dir}/checkpoints
@@ -62,8 +62,12 @@ task:
   checkpoint_encoder: ~
   train_encoder: true
   encoder_type: dinov2
+  # Scratch-training defaults. Pretrained experiments override encoder_lr.
+  encoder_lr: 1e-4
+  task_lr: 1e-4
   encoder_warmup_fine_tune_sensor_epochs: 0
   encoder_warmup_fine_tune_sensor_shallow_blocks: ~
+  val_average_epochs: [10, 20, 30, 40, 50]
   log_confusion_matrix_image: false
 
   optim_cfg:
