@@ -20,6 +20,9 @@ class_names:
   1: slip
 train_data_budget: 1.0
 val_data_budget: 1.0
+# Draw slip and non-slip windows with equal probability in the train loader.
+# Validation keeps the original class distribution.
+balanced_sampling: true
 
 # BraincoSSLDataset still needs these values while loading tactile/FK data.
 # The slip adapter constructs its own configurable non-overlapping windows.
@@ -41,9 +44,9 @@ dataset:
     exclude_before_slip_start_frames: 0
     exclude_after_slip_end_frames: 0
     # Object folders to include. Keep this explicit so ID and leave-one-object-out
-    # experiments always use the same three-object universe.
-    classes: [slip_box_move, slip_case_move, slip_doll_move, slip_plastic_move, slip_pot_move]
-  data_path: ${paths.data_root}/brainco/downstream/slip_detection_move
+    # experiments always use the same four-object universe.
+    classes: [slip_box, slip_doll, slip_evacase, slip_plastic]
+  data_path: ${paths.data_root}/brainco/downstream/slip_data_v2
   brainco_urdf_path: ${paths.data_root}/brainco/urdf
 
 # When null, train_task_brainco_angle.py performs an episode-level K-fold split.
