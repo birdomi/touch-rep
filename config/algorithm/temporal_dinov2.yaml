@@ -1,0 +1,89 @@
+# DINOv2 over temporal crops, on a jointly-trained frame encoder + temporal
+# former. Independent of config/algorithm/angle_dinov2.yaml -- nothing here
+# overrides that file.
+#
+# Both halves of the encoder train from scratch together: the composite is the
+# DINOv2 backbone, so configure_optimizers collects every parameter and the EMA
+# teacher tracks the whole stack. Nothing is frozen.
+
+_target_: tactile_ssl.algorithm.temporal_dinov2.TemporalDINOv2Module
+
+sensor_input_key: joint_force
+pos_input_key: finger_xyz
+
+# Views are contiguous frame ranges of the data.window_size window.
+global_crop_frames: [9, 15]
+local_crop_frames: [4, 7]
+# Each masked token position loses this many consecutive frames.
+ibot_span_frames: [2, 5]
+# Fraction of (frame, token) positions that receive a masked span.
+ibot_mask_ratio: [0.3, 0.7]
+
+encoder:
+  _target_: tactile_ssl.model.temporal_former.temporal_tiny
+  depth: 4
+  num_heads: 3
+  mlp_ratio: 4.0
+  num_register_tokens: 1
+  drop_path_rate: 0.0
+  # "all" = fingertip position tokens + sensor tokens; "sensor" = sensor only.
+  frame_token_set: all
+  frame_encoder:
+    _target_: tactile_ssl.model.angle_tiny
+    in_dim: 10          # fingertip sensors (fingertip_only data)
+    in_chans: 4
+    pos_in_dim: 10
+    pos_in_chans: 3
+    sequence_length: 1
+    time_chunk_size: 1
+    sensor_time_chunk_size: 1
+    pre_fusion_depth: 1
+    num_register_tokens: 1
+    pos_embed_fn: rope
+    rope_hand_offset: 10
+    debug_rope: false
+    with_masktoken: True
+    drop_path_rate: 0.0
+    drop_path_uniform: True
+    normalization: ${data.normalization}
+    causal: False
+
+dino_head:
+  _partial_: True
+  _target_: tactile_ssl.model.layers.DINOHead
+  out_dim: 4096
+
+num_global_masks: 2
+num_local_masks: 8
+min_keep_num_sensors: 1
+moving_average_decay: [0.994, 1.0]
+allow_mask_overlap: True
+teacher_temp: [0.04, 0.07]
+teacher_warmup_epochs: 2
+centering: centering
+
+optim_cfg:
+  _partial_: True
+  _target_: torch.optim.AdamW
+  lr: 1e-4
+  weight_decay: 0.005
+
+lr_scheduler_cfg:
+  _partial_: True
+  _target_: tactile_ssl.model.custom_scheduler.WarmupCosineScheduler
+  steps_per_epoch: ???
+  T_max: ???
+  final_lr: 1.0e-6
+  start_lr: 1e-5
+  warmup_epochs: 10
+
+wd_scheduler_cfg:
+  _partial_: True
+  _target_: tactile_ssl.model.custom_scheduler.CosineWDSchedule
+  final_weight_decay: 0.04
+  ref_weight_decay: 0.004
+  T_max: ???
+
+online_probes: []
+online_probes_lrs: []
+reconstruction_log_freq: 20

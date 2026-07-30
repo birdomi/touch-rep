@@ -1,0 +1,29 @@
+# @package _global_
+
+# dinov2_pretraining_all_rope_v2_hp1_ibotfix with window_stride back at 1.
+#
+# hp1 set window_stride 1 -> 3 to cut redundancy between neighbouring windows,
+# which also cut the dataset to a third: 2,566,605 -> 856,717 windows, i.e.
+# 5012 -> 1673 steps per epoch at batch 512. At a fixed 100 epochs that is 3x
+# fewer samples seen, so "hp1 vs v2" was never only a hyperparameter change.
+#
+# This run isolates that: identical to the ibotfix control in every other
+# respect, so the pair answers whether stride 3 was undertraining.
+#
+# Pairs with dinov2_recon_all_rope_v2_hp1_stride1 (same stride, plus the
+# reconstruction objective).
+
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_pretraining_all_rope_v2_hp1_ibotfix
+  - _self_
+
+experiment_name: dinov2_all_pseudo_force_${model_size}_rope_v2_hp1_ibotfix_stride1
+
+wandb:
+  group: dino_all_pseudo_force_${model_size}_rope_v2_hp1_ibotfix_stride1
+  tags: ["all", "pseudo_force", "4d", "${model_size}", "rope", "v2", "hp1",
+         "ibotfix", "stride1", "control"]
+
+data:
+  window_size: 1
+  window_stride: 1

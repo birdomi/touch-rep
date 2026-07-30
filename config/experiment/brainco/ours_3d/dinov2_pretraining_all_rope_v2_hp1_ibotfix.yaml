@@ -1,0 +1,31 @@
+# @package _global_
+
+# Matched control for dinov2_recon_all_rope_v2_hp1: identical in every respect
+# except that there is no force reconstruction objective.
+#
+# Hyperparameters are inherited verbatim from dinov2_pretraining_all_rope_v2_hp1
+# -- this file only renames the run so it does not land in the same experiments/
+# directory as the pre-fix 2026.07.27-22-14 checkpoint (latest_checkpoint() in
+# scripts/run_downstream_after_pretrain.py picks the newest run dir, so a same
+# named rerun would shadow it).
+#
+# The point of the rename is the iBOT masked-token indexing fix in
+# angle_dinov2.py / brainco_dinov2.py / dinov2.py (2026-07-28 11:17). Before it,
+# torch.nonzero() on the 2-D mask returned (row, col) pairs that were flattened
+# into what is used as a flat index over (b n): at hp1 scale the iBOT loss then
+# ran on 1024 distinct slots out of 47104, touching 2.2% of each batch, and 45%
+# of the selected slots were not masked at all. Every checkpoint produced before
+# that timestamp -- including everything in
+# results_after_pretrain_20260728_072521.md -- carries the broken behaviour, so
+# this run is the baseline the reconstruction run must be compared against.
+
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_pretraining_all_rope_v2_hp1
+  - _self_
+
+experiment_name: dinov2_all_pseudo_force_${model_size}_rope_v2_hp1_ibotfix
+
+wandb:
+  group: dino_all_pseudo_force_${model_size}_rope_v2_hp1_ibotfix
+  tags: ["all", "pseudo_force", "4d", "${model_size}", "rope", "v2", "hp1",
+         "ibotfix", "control"]

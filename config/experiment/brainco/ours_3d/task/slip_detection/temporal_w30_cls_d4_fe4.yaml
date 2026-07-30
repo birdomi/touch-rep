@@ -1,0 +1,38 @@
+# @package _global_
+
+# temporal_w15_cls_d4_fe4 with a 30-frame downstream window instead of 15.
+#
+# input_window_stride tracks input_window_frames (the slip adapter builds
+# non-overlapping windows), and model_encoder.sequence_length must match
+# input_window_frames or encode() splits the window into several encoder passes
+# instead of handing the former the whole thing at once.
+#
+# Note the pretraining stack is W=15, so at 30 frames the former is run on
+# twice the sequence length it was trained on. The former is RoPE over frame
+# index with no fixed positional table, so this is length extrapolation rather
+# than a shape error -- but a gap against the w15 downstream is a window-length
+# effect, not evidence about the checkpoint.
+#
+# Longer windows also mean fewer windows per episode, so the dataset shrinks
+# roughly 2x and each label covers twice as much time.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/temporal_w15_cls_d4_fe4
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_temporal_w30_cls_d4_fe4
+
+wandb:
+  group: temporal_w30_cls_d4_fe4_slip
+  tags: ["brainco", "xyz", "slip_detection", "temporal_former", "w30", "cls",
+         "former_d4", "frame_d4", "42joint"]
+
+data:
+  dataset:
+    config:
+      input_window_frames: 30
+      input_window_stride: 30
+
+task:
+  model_encoder:
+    sequence_length: 30

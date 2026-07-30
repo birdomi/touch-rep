@@ -1,0 +1,32 @@
+# @package _global_
+
+# dinov2_temporal_w15_prox_d2 with the former reading ONE token per frame:
+# the frame encoder's register/CLS summary (frame_token_set: cls) instead of
+# all 52 per-joint tokens.
+#
+# The former therefore attends over a 15 x 1 grid (16 tokens with its own
+# register) -- temporal reasoning over frame summaries. iBOT span masking
+# becomes "recover the masked frames' summaries from the surrounding time",
+# and the DINO crops compare summaries of long vs short frame ranges.
+#
+# The frame encoder still sees all 42 joints internally; only the interface
+# between the two stages narrows to its CLS token, which now receives
+# gradients through the former.
+#
+# Inherited unchanged: proximity-only (in_chans 1), 42 joints, W=15, crop
+# ranges, depth-2 former, batch 2048, stride 5, lr, 100 epochs.
+
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_temporal_w15_prox_d2
+  - _self_
+
+experiment_name: dinov2_temporal_all_pseudo_force_${model_size}_w15_prox_d2_cls
+
+wandb:
+  group: dino_temporal_all_pseudo_force_${model_size}_w15_prox_d2_cls
+  tags: ["all", "pseudo_force", "${model_size}", "rope", "temporal_former",
+         "w15", "proximity_only", "depth2", "42joint", "cls_frames"]
+
+algorithm:
+  encoder:
+    frame_token_set: cls

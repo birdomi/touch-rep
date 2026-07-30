@@ -1,0 +1,26 @@
+# @package _global_
+
+# dinov2_recon_all_rope_v2_hp1 with window_stride back at 1.
+#
+# Matched partner of dinov2_pretraining_all_rope_v2_hp1_ibotfix_stride1: the
+# two differ only by the force reconstruction objective, exactly as the
+# stride-3 pair on GPU 3/4 does.
+#
+# window_stride 1 restores the full 2,566,605-window dataset (5012 steps per
+# epoch at batch 512, 3x the stride-3 configs), so at 100 epochs this sees 3x
+# the samples.
+
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_recon_all_rope_v2_hp1
+  - _self_
+
+experiment_name: dinov2_recon_all_pseudo_force_${model_size}_rope_v2_hp1_stride1
+
+wandb:
+  group: dino_recon_all_pseudo_force_${model_size}_rope_v2_hp1_stride1
+  tags: ["all", "pseudo_force", "4d", "${model_size}", "rope", "v2", "hp1",
+         "reconstruction", "stride1"]
+
+data:
+  window_size: 1
+  window_stride: 1

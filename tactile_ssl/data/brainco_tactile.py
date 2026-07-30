@@ -316,7 +316,7 @@ class BraincoSSLDataset(data.Dataset):
         self.window_time = config.window_time
         self.interpolating_freq = config.interpolating_freq
         self.num_frames_per_window = int(round(self.window_time * self.interpolating_freq))
-        self.max_values = [25000, 25000, 25000, 500000]
+        self.max_values = [1000, 1000, 1000, 100000]
 
         overlap = config.get("window_overlap", 0.0)
         assert 0 <= overlap < 1, "window_overlap must be in [0, 1)"

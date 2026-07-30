@@ -9,6 +9,7 @@ from .braInco_one_transformer import *  # noqa: F401
 from .angle_transformer import *  # noqa: F401
 from .angle_ln_transformer import *  # noqa: F401
 from .spatiotemporal_jepa_predictor import JEPATokenPredictor  # noqa: F401
+from .act import ACTPolicy, act_base, act_tiny  # noqa: F401
 
 
 VIT_EMBED_DIMS = {

@@ -1,0 +1,28 @@
+# @package _global_
+defaults:
+  - override /data: brainco_slip_detection_vision
+  - override /task: brainco_slip_detection_vision
+  - _self_
+
+ssl_name: resnet18
+sensor: brainco
+experiment_name: slip_detection_resnet18
+ckpt_path: ./
+resume_id: ~
+
+fold: 0
+num_folds: 4
+
+wandb:
+  entity: ryk9012-gwangju-institute-of-science-and-technology
+  project: brainco_xyz_slip_detection
+  group: vision_resnet18
+  tags: ["brainco", "vision", "resnet18", "slip_detection"]
+
+task:
+  pretrained: true
+  freeze_backbone: false
+  frame_aggregation: concat
+  optim_cfg:
+    lr: 3e-4
+    weight_decay: 1e-4

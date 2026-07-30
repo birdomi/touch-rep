@@ -58,6 +58,14 @@ task:
     debug_rope: false
     pre_fusion_depth: 1
 
+  # "attentive" = learned AttentivePooler readout; "cls" = the encoder's own
+  # register/CLS token (the summary DINO pretraining actually trained).
+  pooling: attentive
+
+  # Input channel subset (null = all 4). e.g. [0, 1, 2] drops proximity;
+  # model_encoder in_chans must match its length.
+  sensor_channels: null
+
   model_task:
     _target_: tactile_ssl.downstream_task.MeanPoolProbe
     embed_dim: 192

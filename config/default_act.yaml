@@ -1,0 +1,18 @@
+defaults:
+  - paths: default
+  - wandb: wandb_config
+  - data: brainco_act
+  - task: brainco_act
+  - override hydra/job_logging: colorlog
+  - override hydra/hydra_logging: colorlog
+  - _self_
+
+seed: 42
+resume_id: ~
+ckpt_path: ~
+
+# Episode-level K-fold split (val = fold k, train = the rest).
+all_split: false
+num_folds: 5
+fold: 0
+split_seed: 42

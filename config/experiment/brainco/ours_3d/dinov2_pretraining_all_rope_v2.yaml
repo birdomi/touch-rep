@@ -1,0 +1,27 @@
+# @package _global_
+
+defaults:
+  - /experiment/brainco/ours_vectors/dinov2_pretraining_all_rope
+  - _self_
+
+experiment_name: dinov2_all_pseudo_force_${model_size}_rope_v2
+
+wandb:
+  group: dino_all_pseudo_force_${model_size}_rope_v2
+  tags: ["all", "pseudo_force", "4d", "${model_size}", "rope"]
+
+data:
+  sensor: all_pseudo_force
+  oakinkv2_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/oakinkv2
+  arctic_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/arctic
+  taco_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/taco
+  hot3d_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/hot3d
+
+algorithm:
+  sensor_input_key: joint_force
+  pos_input_key: finger_xyz
+  encoder:
+    in_chans: 4
+    pos_in_chans: 3
+    sensor_time_chunk_size: 1
+    pre_fusion_depth: 1

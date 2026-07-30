@@ -71,9 +71,12 @@ class BraincoAngleGraspSLModule(BraincoGraspDetectionSLModule):
         ctx = torch.enable_grad() if encoder_grad_enabled else torch.no_grad()
         with ctx:
             out      = self.model_encoder.forward_features(xs, pos)
-            x_tokens = out["x_tokens"]                             # (B*W, reg+N, D)
 
-        pooled = self.pooler(x_tokens)
+        if self.pooling == "cls":
+            # The encoder's own register/CLS token, as trained by DINO.
+            pooled = out["x_norm_regtokens"][:, 0]
+        else:
+            pooled = self.pooler(out["x_tokens"])                  # (B*W, 1, D)
         window_tokens = pooled.reshape(B, num_encoder_windows, -1)
 
         if mask is not None:
@@ -97,6 +100,8 @@ class BraincoAngleGraspSLModule(BraincoGraspDetectionSLModule):
 
     def forward(self, batch: Dict[str, Any]) -> torch.Tensor:
         joint_contact = batch["joint_contact"]   # (B, W, 10, 4)
+        if self.sensor_channels is not None:
+            joint_contact = joint_contact[..., self.sensor_channels]
         if "finger_xyz" in batch:
             position_input = batch["finger_xyz"]
         else:

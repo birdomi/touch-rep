@@ -4,10 +4,10 @@ defaults:
   - /experiment/brainco/ours_3d/dinov2_prediction
   - _self_
 
-experiment_name: dinov2_prediction_local_all_pseudo_force_${model_size}_rope_temporal3
+experiment_name: dinov2_prediction_local_all_pseudo_force_${model_size}_rope_temporal3_v2
 
 wandb:
-  group: dino_prediction_local_all_pseudo_force_${model_size}_rope_temporal3
+  group: dino_prediction_local_all_pseudo_force_${model_size}_rope_temporal3_v2
   tags: ["all", "pseudo_force", "4d", "${model_size}", "rope", "temporal3", "prediction", "local_view"]
 
 data:

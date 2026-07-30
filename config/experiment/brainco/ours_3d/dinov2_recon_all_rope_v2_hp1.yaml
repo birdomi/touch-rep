@@ -1,0 +1,62 @@
+dd# @package _global_
+
+# Masked force reconstruction on top of the hp1 winner
+# (dinov2_pretraining_all_rope_v2_hp1, macro F1 0.8960 grasp / 0.6607 slip in
+# scripts/results_after_pretrain_20260728_072521.md).
+#
+# DINO/iBOT/KoLeo are invariance objectives and are free to discard force
+# magnitude. A regression head reconstructs the normalized force vector from
+# each sensor token, which a magnitude-invariant feature cannot do, so the
+# latent has to keep force information.
+#
+# token_set is `visible` (read out the force of the slots the student can see)
+# rather than `masked` (MAE style). Measured on a synthetic task where force is
+# a deterministic function of the joint index, fitting against a deliberately
+# permuted target as a control:
+#
+#   visible   1.9349 -> 0.0161   control 1.6616   identifiable
+#   masked    2.4808 -> 1.3698   control 1.4824   NOT identifiable
+#   all       2.3278 -> 0.3914   control 1.0426   identifiable (via visible)
+#
+# Masked reconstruction is not learnable here: force is spatially sparse, so a
+# masked joint is only weakly predictable from its neighbours and the head just
+# fits the marginal. `visible` is the well-posed objective.
+#
+# All DINOv2 hyperparameters -- out_dim 4096, drop_path 0.0, warmup 10, ibot
+# [0.3,0.7], num_local_masks 8, window_size 1, window_stride 3, lr 1e-4, batch
+# 512, 100 epochs -- are inherited from the winner unchanged.
+#
+# NOTE: this config postdates the iBOT masked-token indexing fix in
+# angle_dinov2.py, so it is NOT directly comparable to the runs in
+# results_after_pretrain_20260728_072521.md, which were all trained with the
+# broken indexing (iBOT saw only ~2% of each batch). A rerun of the plain
+# dinov2_pretraining_all_rope_v2_hp1 baseline is needed for a fair comparison.
+#
+# reconstruction_loss_weight is 4.0: at weight 1.0 the reconstruction term was
+# 0.068 against an ssl_loss of 5.69, about 1.2% of the total, too small to
+# shift the shared representation.
+#
+# reconstruction_contact_weight stays 0 so the objective is the plain one.
+# Worth raising later: at weight 1.0 the head's error on contact tokens
+# (contact_mae 0.504) was 3.5x its error overall (mae 0.143), i.e. it is
+# weakest on exactly the tokens that carry force.
+
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_pretraining_all_rope_v2_hp1
+  - _self_
+
+experiment_name: dinov2_recon_all_pseudo_force_${model_size}_rope_v2_hp1
+
+wandb:
+  group: dino_recon_all_pseudo_force_${model_size}_rope_v2_hp1
+  tags: ["all", "pseudo_force", "4d", "${model_size}", "rope", "v2", "hp1",
+         "reconstruction"]
+
+algorithm:
+  _target_: tactile_ssl.algorithm.AngleDINOv2ReconstructionModule
+  reconstruction_loss_weight: 4.0
+  reconstruction_loss_type: smooth_l1
+  reconstruction_token_set: visible
+  # Single linear layer; set to an int for a 2-layer GELU MLP head instead.
+  reconstruction_hidden_dim: null
+  reconstruction_contact_weight: 0.0

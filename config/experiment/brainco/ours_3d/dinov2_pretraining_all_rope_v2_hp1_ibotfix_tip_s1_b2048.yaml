@@ -1,0 +1,28 @@
+# @package _global_
+
+# Fingertip-only pretraining, window_stride 1, batch 2048.
+#
+# vs dinov2_pretraining_all_rope_v2_hp1_ibotfix_tip (stride 3, batch 512):
+#   window_stride  3 -> 1     full 2,566,605-window dataset (3x the samples
+#                             per epoch; 1253 steps/epoch at batch 2048)
+#   batch_size     512 -> 2048
+#
+# lr stays at the inherited 1e-4: note that linear scaling for the 4x batch
+# would suggest 4e-4, so if this run underperforms the stride-3 tip run at
+# equal epochs, try the scaled lr before concluding anything about stride.
+
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_pretraining_all_rope_v2_hp1_ibotfix_tip
+  - _self_
+
+experiment_name: dinov2_all_pseudo_force_${model_size}_rope_v2_hp1_ibotfix_tip_s1_b2048
+
+wandb:
+  group: dino_all_pseudo_force_${model_size}_rope_v2_hp1_ibotfix_tip_s1_b2048
+  tags: ["all", "pseudo_force", "4d", "${model_size}", "rope", "v2", "hp1",
+         "ibotfix", "fingertip", "stride1", "b2048"]
+
+data:
+  window_stride: 1
+  train_dataloader:
+    batch_size: 2048

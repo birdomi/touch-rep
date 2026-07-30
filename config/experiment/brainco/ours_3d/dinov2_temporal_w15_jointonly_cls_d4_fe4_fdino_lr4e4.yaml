@@ -1,0 +1,43 @@
+# @package _global_
+
+# Joint-only control for dinov2_temporal_w15_prox_cls_d4_fe4_fdino_lr4e4: the
+# frame encoder's sensor stream is removed outright
+# (frame_encoder.input_streams: pos), so no force or proximity value is ever
+# embedded. The frame sequence is registers + 10 pose tokens and nothing else
+# -- this is a structural removal, not a zero-filled sensor stream, so there is
+# no constant token for the model to key on either.
+#
+# Everything the sensor stream fed is dropped with it: the pre-fusion sensor
+# blocks get no input, and the frame-level DINO/iBOT branch crops and masks the
+# pose stream alone (sensor_global/sensor_ibot are skipped). The window-level
+# objective is untouched -- frame_token_set is cls, so the former still sees one
+# token per frame regardless of what the frame encoder was built from.
+#
+# The dataloader still reads proximity (data.sensor_channels is inherited); it
+# simply never reaches the network. sensor_embed/sensor_block are still
+# constructed so state dicts stay loadable in both directions, but they receive
+# no input and therefore no gradient.
+#
+# Purpose: bound how much of this stack's downstream slip/grasp performance
+# comes from hand kinematics alone. Any gap to the prox parent is what the
+# tactile channel is actually worth.
+#
+# Inherited: 42-joint pose layout, CLS-frames former input, former depth 4,
+# frame encoder depth 4, W=15, stride 5, batch 2048, lr 4e-4, 500 epochs.
+
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_temporal_w15_prox_cls_d4_fe4_fdino_lr4e4
+  - _self_
+
+experiment_name: dinov2_temporal_all_pseudo_force_${model_size}_w15_jointonly_cls_d4_fe4_fdino_lr4e4
+
+wandb:
+  group: dino_temporal_all_pseudo_force_${model_size}_w15_jointonly_cls_d4_fe4_fdino_lr4e4
+  tags: ["all", "pseudo_force", "${model_size}", "rope", "temporal_former",
+         "w15", "joint_only", "no_force", "42joint", "cls_frames", "former_d4",
+         "frame_d4", "frame_dino", "lr4e-4"]
+
+algorithm:
+  encoder:
+    frame_encoder:
+      input_streams: pos

@@ -1,0 +1,54 @@
+# @package _global_
+# Small/fast ACT run for smoke-testing the pipeline on a couple of episodes.
+#   python train_act.py +experiment=brainco/act/act_tiny_smoke.yaml
+defaults:
+  - override /data: brainco_act
+  - override /task: brainco_act
+  - _self_
+
+experiment_name: act_tiny_smoke
+ckpt_path: ./
+resume_id: ~
+
+fold: 0
+num_folds: 2
+
+data:
+  chunk_size: 20
+  frame_stride: 5
+  image_height: 120
+  image_width: 160
+  train_dataloader:
+    batch_size: 8
+    num_workers: 2
+    persistent_workers: false
+  val_dataloader:
+    batch_size: 8
+    num_workers: 2
+    persistent_workers: false
+  dataset:
+    config:
+      max_episodes: 4
+
+task:
+  model:
+    hidden_dim: 256
+    dim_feedforward: 1024
+    enc_layers: 2
+    dec_layers: 4
+    cvae_enc_layers: 2
+  scheduler_cfg:
+    # The task default warms up over 5 epochs, which is longer than this run —
+    # the LR would never leave warmup and the loss would look flat.
+    warmup_epochs: 1
+
+trainer:
+  max_epochs: 2
+  validation_frequency: 1
+  checkpoint_frequency: 1
+  log_frequency: 5
+
+wandb:
+  project: brainco_act
+  group: act_smoke
+  tags: ["brainco", "act", "smoke"]

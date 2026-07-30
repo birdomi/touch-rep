@@ -110,6 +110,7 @@ class AngleTransformer(SignalTransformer):
         fine_tune_sensor_shallow_blocks: Optional[int] = 0,
         rope_hand_offset: int = 100,
         debug_rope: bool = False,
+        input_streams: Literal["both", "pos"] = "both",
     ):
         assert sequence_length % time_chunk_size == 0, (
             f"sequence_length({sequence_length}) must be divisible by time_chunk_size({time_chunk_size})"
@@ -125,6 +126,20 @@ class AngleTransformer(SignalTransformer):
         )
         assert in_dim % 2 == 0, f"in_dim({in_dim}) must be even (left/right hand)"
         assert pos_in_dim % 2 == 0, f"pos_in_dim({pos_in_dim}) must be even (left/right hand)"
+
+        if input_streams not in {"both", "pos"}:
+            raise ValueError(
+                f"input_streams must be 'both' or 'pos', got {input_streams!r}"
+            )
+        # "pos": joint-only ablation. The sensor stream is never embedded, so
+        # no force/proximity token ever enters the network -- the sequence is
+        # registers + pose tokens and nothing else. sensor_embed and
+        # sensor_block still exist (so state dicts stay loadable both ways) but
+        # receive no input and therefore no gradient.
+        self.pos_only = input_streams == "pos"
+        if self.pos_only and use_null_token:
+            raise ValueError("use_null_token applies to the sensor stream; "
+                             "it cannot be combined with input_streams='pos'")
 
         self.use_null_token = use_null_token
         self.debug_rope = bool(debug_rope)
@@ -583,6 +598,24 @@ class AngleTransformer(SignalTransformer):
         Returns:
             x_prenorm, x_postnorm : both (B_eff, reg+N_contact+N_angle, D)
         """
+        if sen is None:
+            # Joint-only: registers + pose tokens are the whole sequence.
+            rope_positions = pos_rope_positions if self.use_rope else None
+            if not self.use_rope:
+                ang_pe = self._full_embed(self.angle_pos_embed)
+                if pos_mask is not None:
+                    np_ = pos_mask.shape[-1]
+                    pos[:, 1:] = pos[:, 1:] + ang_pe[pos_mask.view(-1, np_)]
+                else:
+                    pos[:, 1:] = pos[:, 1:] + ang_pe
+
+            fused = pos
+            for blk in self.blocks:
+                kwargs = {} if rope_positions is None else {"rope_positions": rope_positions}
+                fused = blk(fused, None, **kwargs)
+            x_norm = self.norm(fused)
+            return x_norm, x_norm
+
         rope_positions = None
         if self.use_rope:
             rope_positions = torch.cat([pos_rope_positions, sen_rope_positions], dim=1)
@@ -659,7 +692,11 @@ class AngleTransformer(SignalTransformer):
                 masktoken_masks = masktoken_masks | null_mask
 
         # --- embed streams ---------------------------------------------------
-        x   = self.pre_sensor_embed(x)
+        # Joint-only: the sensor stream is not embedded at all, so ``x`` never
+        # becomes tokens. The masks that select sensor joints are meaningless
+        # here and are ignored.
+        if not self.pos_only:
+            x = self.pre_sensor_embed(x)
         pos = self.pre_pos_embed(pos)
         embedded_x = x
         embedded_pos = pos
@@ -670,19 +707,25 @@ class AngleTransformer(SignalTransformer):
 
         _pos_masks = pos_masks if pos_masks is not None else masks
 
-        x, bias, sen_rope_positions = self.prepare_tokens_with_mask(
-            x, masks, mask_type, masktoken_masks,
-            joint_embed=sen_pe, skip_register=True, rope_stream="contact",
-        )
+        if self.pos_only:
+            bias, sen_rope_positions = None, None
+        else:
+            x, bias, sen_rope_positions = self.prepare_tokens_with_mask(
+                x, masks, mask_type, masktoken_masks,
+                joint_embed=sen_pe, skip_register=True, rope_stream="contact",
+            )
         pos, _, pos_rope_positions = self.prepare_tokens_with_mask(
             pos, _pos_masks, mask_type, pos_masktoken_masks,
             joint_embed=ang_pe, skip_register=False, rope_stream="angle",
         )
 
         # --- pre-fusion sensor attention -------------------------------------
-        sen, sen_rope_positions = self.sensor_transform(
-            x, bias, rope_positions=sen_rope_positions
-        )
+        if self.pos_only:
+            sen = None
+        else:
+            sen, sen_rope_positions = self.sensor_transform(
+                x, bias, rope_positions=sen_rope_positions
+            )
 
         # --- fusion ----------------------------------------------------------
         x_prenorm, x_postnorm = self.transform_concat(

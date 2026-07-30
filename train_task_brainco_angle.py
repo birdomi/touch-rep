@@ -112,6 +112,64 @@ def _balanced_train_loader(
     return data.DataLoader(train_dataset, sampler=sampler, **loader_cfg)
 
 
+def _compute_signal_stats(
+    train_dataset: data.Dataset,
+    input_key: str = "joint_contact",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute population channel statistics from the final training subset."""
+    if len(train_dataset) == 0:
+        raise ValueError("Cannot compute signal statistics from an empty train split")
+
+    channel_sum = None
+    channel_sq_sum = None
+    sample_count = 0
+
+    for index in range(len(train_dataset)):
+        values = torch.as_tensor(
+            train_dataset[index][input_key], dtype=torch.float64
+        )
+        if values.ndim < 1:
+            raise ValueError(
+                f"Expected '{input_key}' to have a channel dimension, "
+                f"got shape {tuple(values.shape)}"
+            )
+        values = values.reshape(-1, values.shape[-1])
+        if not torch.isfinite(values).all():
+            raise ValueError(
+                f"Non-finite values found in training sample {index} "
+                f"for '{input_key}'"
+            )
+
+        if channel_sum is None:
+            channel_sum = torch.zeros(values.shape[-1], dtype=torch.float64)
+            channel_sq_sum = torch.zeros_like(channel_sum)
+        elif values.shape[-1] != channel_sum.numel():
+            raise ValueError(
+                f"Inconsistent '{input_key}' channels: expected "
+                f"{channel_sum.numel()}, got {values.shape[-1]}"
+            )
+
+        channel_sum += values.sum(dim=0)
+        channel_sq_sum += values.square().sum(dim=0)
+        sample_count += values.shape[0]
+
+    mean = channel_sum / sample_count
+    variance = (channel_sq_sum / sample_count - mean.square()).clamp_min(0.0)
+    std = variance.sqrt()
+    std = torch.where(std > 1e-6, std, torch.ones_like(std))
+    return mean.float(), std.float()
+
+
+def _attach_train_signal_stats(train_dataset: data.Dataset) -> None:
+    signal_mean, signal_std = _compute_signal_stats(train_dataset)
+    train_dataset.computed_signal_mean = signal_mean
+    train_dataset.computed_signal_std = signal_std
+    logger.info(
+        "Signal normalization from training split only: "
+        f"mean={signal_mean.tolist()}, std={signal_std.tolist()}"
+    )
+
+
 # ── wandb ──────────────────────────────────────────────────────────────────────
 
 def init_wandb(cfg: DictConfig):
@@ -129,6 +187,21 @@ def init_wandb(cfg: DictConfig):
 
 # ── dataloader ────────────────────────────────────────────────────────────────
 
+# K-fold changes only the train/val index split, never the dataset itself, so
+# building it once per process avoids re-running episode parsing and FK for
+# every fold.
+_DATASET_CACHE: dict = {}
+
+
+def _instantiate_dataset_cached(dataset_cfg: DictConfig):
+    key = OmegaConf.to_yaml(dataset_cfg, resolve=True)
+    if key not in _DATASET_CACHE:
+        _DATASET_CACHE[key] = hydra.utils.instantiate(dataset_cfg)
+    else:
+        logger.info("Reusing dataset built for an earlier fold.")
+    return _DATASET_CACHE[key]
+
+
 def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
     """K-fold episode split for BrainCo angle/XYZ downstream datasets."""
     import random
@@ -139,24 +212,13 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
     seed       = int(cfg.get("split_seed", 42))
     val_fold   = fold % num_folds
 
-    dataset = hydra.utils.instantiate(data_cfg.dataset)
+    dataset = _instantiate_dataset_cached(data_cfg.dataset)
 
     if data_cfg.get("val_dataset") is not None:
-        val_dataset = hydra.utils.instantiate(data_cfg.val_dataset)
+        val_dataset = _instantiate_dataset_cached(data_cfg.val_dataset)
 
         train_indices = list(range(len(dataset.windows)))
         val_indices   = list(range(len(val_dataset.windows)))
-
-        # Contact values are already min-max scaled in the dataset. Keep the
-        # encoder transform as identity instead of applying train-set z-score.
-        num_channels = dataset.windows[train_indices[0]]["joint_contact"].shape[-1]
-        signal_mean = torch.zeros(num_channels)
-        signal_std = torch.ones(num_channels)
-
-        dataset.computed_signal_mean = signal_mean
-        dataset.computed_signal_std  = signal_std
-        val_dataset.computed_signal_mean = signal_mean
-        val_dataset.computed_signal_std  = signal_std
 
         CLASS_NAMES = {
             int(label): str(name)
@@ -175,9 +237,8 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
             *[f"    [train] {n}" for n in _ep_names(dataset)],
             f"  Val:   {len(val_dataset.episode_data)} episodes",
             *[f"    [val]   {n}" for n in _ep_names(val_dataset)],
-            "Using dataset min-max scaling only (no train mean/std) ...",
-            f"[NormStats] signal_mean: {signal_mean.tolist()}",
-            f"[NormStats] signal_std:  {signal_std.tolist()}",
+            "Using dataset fixed-max scaling.",
+            "Encoder normalization computed from training split only.",
             "  (position stream: NOT normalized)",
             "=== Class Distribution ===",
         ]
@@ -206,6 +267,8 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
         if data_cfg.get("val_data_budget", 1.0) < 1.0:
             budget = int(len(val_dset) * data_cfg.val_data_budget)
             val_dset, _ = data.random_split(val_dset, [budget, len(val_dset) - budget], generator=g)
+
+        _attach_train_signal_stats(train_dset)
 
         print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val")
 
@@ -255,19 +318,11 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
         *[f"    [val]   {n}" for n in val_ep_names],
     ]
 
-    # Contact values are already min-max scaled in the dataset. Keep the
-    # encoder transform as identity instead of applying train-set z-score.
-    lines.append("Using dataset min-max scaling only (no train mean/std) ...")
-    num_channels = dataset.windows[train_indices[0]]["joint_contact"].shape[-1]
-    signal_mean = torch.zeros(num_channels)
-    signal_std = torch.ones(num_channels)
-
-    lines.append(f"[NormStats] signal_mean: {signal_mean.tolist()}")
-    lines.append(f"[NormStats] signal_std:  {signal_std.tolist()}")
+    lines.append("Using dataset fixed-max scaling.")
+    lines.append(
+        "Encoder normalization computed from training split only."
+    )
     lines.append("  (position stream: NOT normalized)")
-
-    dataset.computed_signal_mean = signal_mean
-    dataset.computed_signal_std  = signal_std
 
     # ── Class distribution ────────────────────────────────────────────────────
     CLASS_NAMES = {
@@ -306,6 +361,8 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
         budget = int(len(val_dset) * data_cfg.val_data_budget)
         val_dset, _ = data.random_split(val_dset, [budget, len(val_dset) - budget], generator=g)
 
+    _attach_train_signal_stats(train_dset)
+
     print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val")
 
     train_loader = _balanced_train_loader(train_dset, data_cfg, g)
@@ -323,7 +380,7 @@ def get_dataloader_brainco_angle_oc(cfg: DictConfig):
     seed      = int(cfg.get("split_seed", 42))
     val_fold  = fold % num_folds
 
-    dataset = hydra.utils.instantiate(data_cfg.dataset)
+    dataset = _instantiate_dataset_cached(data_cfg.dataset)
     num_classes = len(dataset.classes)
 
     # ── Patch num_classes into task config ────────────────────────────────────
@@ -362,21 +419,13 @@ def get_dataloader_brainco_angle_oc(cfg: DictConfig):
         else:
             train_indices.extend(wins); train_ep_names.append(name)
 
-    # Contact values are already min-max scaled in the dataset.
-    num_channels = dataset.windows[train_indices[0]]["joint_contact"].shape[-1]
-    signal_mean = torch.zeros(num_channels)
-    signal_std = torch.ones(num_channels)
-
-    dataset.computed_signal_mean = signal_mean
-    dataset.computed_signal_std  = signal_std
-
     lines = [
         f"\n=== OC Episode Split  (val_fold={val_fold}/{num_folds}, "
         f"total={n_ep}, seed={seed}, classes={dataset.classes}) ===",
         f"  Train: {len(train_ep_names)} episodes  ({len(train_indices)} windows)",
         f"  Val:   {len(val_ep_names)} episodes  ({len(val_indices)} windows)",
-        f"[NormStats] signal_mean: {signal_mean.tolist()}",
-        f"[NormStats] signal_std:  {signal_std.tolist()}",
+        "Using dataset fixed-max scaling.",
+        "Encoder normalization computed from training split only.",
     ]
     split_log = "\n".join(lines)
     print(split_log)
@@ -394,6 +443,8 @@ def get_dataloader_brainco_angle_oc(cfg: DictConfig):
     if data_cfg.get("val_data_budget", 1.0) < 1.0:
         budget = int(len(val_dset) * data_cfg.val_data_budget)
         val_dset, _ = data.random_split(val_dset, [budget, len(val_dset) - budget], generator=g)
+
+    _attach_train_signal_stats(train_dset)
 
     print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val")
 
@@ -491,19 +542,26 @@ def train(cfg: DictConfig):
     logger.info(f"Instantiating model <{cfg.task._target_}>")
     model = hydra.utils.instantiate(cfg.task)
 
-    # ── Inject normalization stats into encoder ───────────────────────────────
-    _ds = train_loader.dataset
-    while hasattr(_ds, "dataset"):
-        _ds = _ds.dataset
-    if hasattr(_ds, "computed_signal_mean") and hasattr(model, "model_encoder"):
-        enc = model.model_encoder
-        if hasattr(enc, "update_stats"):
-            enc.update_stats(
-                _ds.computed_signal_mean,
-                _ds.computed_signal_std,
-                # angles are not normalized → no pos stats
-            )
-            logger.info("Encoder signal normalization stats updated.")
+    train_stats = train_loader.dataset
+    if not hasattr(train_stats, "computed_signal_mean"):
+        raise RuntimeError("Training dataset is missing computed signal statistics")
+    if not hasattr(model, "model_encoder") or not hasattr(
+        model.model_encoder, "update_stats"
+    ):
+        raise TypeError("Downstream model encoder does not support update_stats()")
+    signal_mean = train_stats.computed_signal_mean
+    signal_std = train_stats.computed_signal_std
+    # The stats are computed on the full 4-channel data; when the task keeps a
+    # channel subset (task.sensor_channels), the encoder only ever sees those.
+    sensor_channels = getattr(model, "sensor_channels", None)
+    if sensor_channels is not None:
+        signal_mean = signal_mean[sensor_channels]
+        signal_std = signal_std[sensor_channels]
+    model.model_encoder.update_stats(signal_mean, signal_std)
+    logger.info(
+        "Encoder normalization updated from downstream training split: "
+        f"mean={signal_mean.tolist()}, std={signal_std.tolist()}"
+    )
 
     trainer = Trainer(wandb_logger=wb, **cfg.trainer)
     trainer.fit(model, train_loader, val_loader, ckpt_path=cfg.ckpt_path)
@@ -517,9 +575,16 @@ def train(cfg: DictConfig):
     print(f"\n{'='*40}")
     print(f"  TRAINING COMPLETE")
     print(f"{'='*40}")
-    print(f"  Last  — Acc: {last.get('accuracy', float('nan')):.4f}  F1: {last.get('f1', float('nan')):.4f}")
-    print(f"  Best  — Acc: {best.get('accuracy', float('nan')):.4f}  F1: {best.get('f1', float('nan')):.4f}")
-    print(f"  EpochAvg — Acc: {epoch_avg.get('accuracy', float('nan')):.4f}  F1: {epoch_avg.get('f1', float('nan')):.4f}")
+    def _line(tag, m):
+        return (
+            f"  {tag} — BalAcc: {m.get('balanced_accuracy', float('nan')):.4f}"
+            f"  F1: {m.get('f1', float('nan')):.4f}"
+            f"  F1macro: {m.get('f1_macro', float('nan')):.4f}"
+        )
+
+    print(_line("Last    ", last))
+    print(_line("Best    ", best))
+    print(_line("EpochAvg", epoch_avg))
     print(f"  EpochAvg epochs: {average_epochs_text}")
     print(f"{'='*40}\n")
 
@@ -559,18 +624,19 @@ def main(cfg: DictConfig):
             ("epoch_avg", "Epoch Average"),
         ]:
             print(f"\n{'='*60}\n  K-FOLD SUMMARY ({label})\n{'='*60}")
-            print(f"{'Fold':>6}  {'Accuracy':>10}  {'F1 Score':>10}")
-            print("-" * 34)
-            accs, f1s = [], []
+            print(f"{'Fold':>6}  {'Bal Acc':>10}  {'F1 Score':>10}  {'F1 Macro':>10}")
+            print("-" * 46)
+            accs, f1s, f1_macros = [], [], []
             for f in range(num_folds):
                 m   = all_metrics.get(f, {}).get(tag, {})
-                acc = m.get("accuracy", float("nan"))
+                acc = m.get("balanced_accuracy", m.get("accuracy", float("nan")))
                 f1  = m.get("f1",       float("nan"))
-                accs.append(acc); f1s.append(f1)
-                print(f"{f:>6}  {acc:>10.4f}  {f1:>10.4f}")
-            print("-" * 34)
-            print(f"{'Mean':>6}  {np.mean(accs):>10.4f}  {np.mean(f1s):>10.4f}")
-            print(f"{'Std':>6}  {np.std(accs):>10.4f}  {np.std(f1s):>10.4f}")
+                f1m = m.get("f1_macro", float("nan"))
+                accs.append(acc); f1s.append(f1); f1_macros.append(f1m)
+                print(f"{f:>6}  {acc:>10.4f}  {f1:>10.4f}  {f1m:>10.4f}")
+            print("-" * 46)
+            print(f"{'Mean':>6}  {np.mean(accs):>10.4f}  {np.mean(f1s):>10.4f}  {np.mean(f1_macros):>10.4f}")
+            print(f"{'Std':>6}  {np.std(accs):>10.4f}  {np.std(f1s):>10.4f}  {np.std(f1_macros):>10.4f}")
     else:
         train(cfg)
 

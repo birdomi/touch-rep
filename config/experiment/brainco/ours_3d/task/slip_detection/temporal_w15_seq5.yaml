@@ -1,0 +1,22 @@
+# @package _global_
+
+# slip_detection on 15-frame windows with a temporal encoder pretrained at W=5.
+#
+# sequence_length 5 (not 15) so encode() splits the 15-frame window into three
+# consecutive 5-frame encoder windows -- the same span the former saw during
+# pretraining -- instead of extrapolating its frame-index RoPE 3x in one pass.
+# The task probe then pools over the three resulting window tokens.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/temporal_w15
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_temporal_w15_seq5
+
+wandb:
+  group: temporal_w15_seq5_slip
+  tags: ["brainco", "xyz", "slip_detection", "temporal_former", "w15", "seq5"]
+
+task:
+  model_encoder:
+    sequence_length: 5

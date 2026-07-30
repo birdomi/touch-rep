@@ -35,6 +35,12 @@ from tactile_ssl.data.force_channels import (
 
 log = get_pylogger(__name__)
 _FINGERTIP_INDICES = (4, 8, 12, 16, 20)
+# Fingertip joints in the concatenated 42-joint (lh + rh) layout. Matches
+# TACTILE_SENSOR_IDXS in model/angle_transformer.py, which maps 10-token
+# inputs onto the same skeleton RoPE coordinates the BrainCo downstream uses.
+FINGERTIP_COLUMNS = tuple(_FINGERTIP_INDICES) + tuple(
+    21 + i for i in _FINGERTIP_INDICES
+)
 
 
 class _PseudoForceSequenceData:
@@ -193,7 +199,9 @@ class PseudoForceAngleDataset(data.Dataset):
 
     - ``joint_contact``: ``(W, 42, 4)`` or ``(W, 42, 8)`` when
       ``include_force_delta=True``. The extra four channels are the current
-      force minus the preceding frame's force.
+      force minus the preceding frame's force. With ``fingertip_only=True``
+      the joint axis is the 10 fingertips (``FINGERTIP_COLUMNS``) instead
+      of all 42 joints, matching the BrainCo downstream sensor layout.
     - ``finger_xyz``: ``(W, 10, 3)``
     - ``classification_id``: contact class derived from fingertip normal force
     """
@@ -208,6 +216,8 @@ class PseudoForceAngleDataset(data.Dataset):
         participants: Optional[List[str]] = None,
         sensor_output_key: str = "joint_contact",
         include_force_delta: bool = False,
+        fingertip_only: bool = False,
+        sensor_channels: Optional[List[str]] = None,
         _file_pattern: str = "*.pkl",
         _sequence_loader=_load_pseudo_force_sequence,
     ):
@@ -220,6 +230,18 @@ class PseudoForceAngleDataset(data.Dataset):
         self.window_stride = int(window_stride)
         self.sensor_output_key = str(sensor_output_key)
         self.include_force_delta = bool(include_force_delta)
+        self.fingertip_only = bool(fingertip_only)
+        if sensor_channels:
+            unknown = [c for c in sensor_channels if c not in FORCE_CHANNELS]
+            if unknown:
+                raise ValueError(
+                    f"Unknown sensor_channels {unknown}; valid: {FORCE_CHANNELS}"
+                )
+            self.channel_indices: Optional[List[int]] = [
+                FORCE_CHANNELS.index(c) for c in sensor_channels
+            ]
+        else:
+            self.channel_indices = None
 
         root = Path(data_root)
         if not root.exists():
@@ -301,6 +323,16 @@ class PseudoForceAngleDataset(data.Dataset):
             if start == 0:
                 delta[0].zero_()
             joint_contact = torch.cat((joint_contact, delta), dim=-1)
+
+        if self.fingertip_only:
+            joint_contact = joint_contact[:, FINGERTIP_COLUMNS]
+
+        if self.channel_indices is not None:
+            idx = list(self.channel_indices)
+            if self.include_force_delta:
+                # Delta channels sit after the raw ones; keep matching pairs.
+                idx += [c + len(FORCE_CHANNELS) for c in self.channel_indices]
+            joint_contact = joint_contact[..., idx]
 
         return {
             self.sensor_output_key: joint_contact,

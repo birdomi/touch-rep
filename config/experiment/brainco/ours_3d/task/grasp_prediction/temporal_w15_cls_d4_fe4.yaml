@@ -1,0 +1,30 @@
+# @package _global_
+
+# Downstream config mirroring the dinov2_temporal_w15_prox_cls_d4_fe4
+# pretraining stack: former depth 4, frame encoder depth 4 with all 42 joints
+# (BrainCo's 10 fingertip sensors map onto the skeleton via the sparse-tactile
+# RoPE branch), CLS-frames former input, CLS readout.
+#
+# frame_encoder.in_chans stays 4: BrainCo provides 4 channels. Against a
+# prox-pretrained (1-channel) checkpoint the sensor_embed projection is
+# reinitialized, as in every earlier prox evaluation. Without a checkpoint
+# this is the architecture's scratch baseline.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/temporal_w15_cls
+  - _self_
+
+experiment_name: brainco_xyz_grasp_prediction_temporal_w15_cls_d4_fe4
+
+wandb:
+  group: temporal_w15_cls_d4_fe4_grasp
+  tags: ["brainco", "xyz", "grasp_prediction", "temporal_former", "w15", "cls",
+         "former_d4", "frame_d4", "42joint"]
+
+task:
+  model_encoder:
+    depth: 4
+    frame_token_set: cls
+    frame_encoder:
+      in_dim: 42
+      depth: 4

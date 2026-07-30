@@ -1,0 +1,38 @@
+# @package _global_
+
+# temporal_w15_cls_d4_fe4 for joint-only checkpoints -- the
+# dinov2_temporal_w15_jointonly_* line, pretrained with
+# frame_encoder.input_streams: pos so no force or proximity token ever entered
+# the network.
+#
+# input_streams MUST be set here too. Those checkpoints still CONTAIN
+# sensor_embed and sensor_block tensors -- constructed for state-dict
+# compatibility but never fed, so never trained past their random init. A
+# downstream built with the default input_streams='both' would load those
+# untrained weights and push real BrainCo force through them into a former that
+# has never seen a sensor token. That is not the joint-only model; it is a
+# corrupted version of it.
+#
+# With input_streams: pos the sensor stream is absent downstream as well, so the
+# 3 channel-mismatched tensors load_encoder reports as skipped
+# (sensor_embed.proj.weight, signal_mean, signal_std) are exactly the ones the
+# model does not use.
+#
+# Everything else is inherited: former depth 4, frame encoder depth 4,
+# CLS-frames former input, CLS readout, 42-joint pose layout, 15-frame window.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/temporal_w15_cls_d4_fe4
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_temporal_w15_cls_d4_fe4_jointonly
+
+wandb:
+  group: temporal_w15_cls_d4_fe4_jointonly_slip
+  tags: ["brainco", "xyz", "slip_detection", "temporal_former", "w15", "cls",
+         "former_d4", "frame_d4", "42joint", "joint_only", "no_force"]
+
+task:
+  model_encoder:
+    frame_encoder:
+      input_streams: pos

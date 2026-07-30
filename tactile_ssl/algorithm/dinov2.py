@@ -298,8 +298,11 @@ class DINOv2Module(Module, nn.Module):
     def forward(self, x: torch.Tensor, global_masks: torch.Tensor, local_masks: torch.Tensor, ibot_masks: torch.Tensor):
         assert global_masks is not None and local_masks is not None, "Masks are required for DINOModule during training"
 
+        # Flatten before nonzero: on a 2-D mask nonzero returns (row, col)
+        # pairs, and flattening those interleaves row and column numbers into
+        # what is then used as a flat index into (b n).
         ibot_masks_flat = ibot_masks.flatten(0, 1)
-        ibot_mask_indices = torch.nonzero(ibot_masks_flat).flatten()
+        ibot_mask_indices = torch.nonzero(ibot_masks_flat.flatten()).flatten()
         num_ibot_tokens = len(ibot_mask_indices)
 
         student_global_dict = self.student_encoder_dict["backbone"].forward_features(

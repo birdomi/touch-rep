@@ -1,0 +1,24 @@
+# @package _global_
+
+# temporal_w15_cls_d4_fe4 with the proximity channel removed from the input:
+# the model sees [normal_force, tangential_x, tangential_y] only (in_chans 3).
+#
+# BrainCo's proximity channel has a known extreme scale (0..451k) and its own
+# noise profile; this measures how much downstream signal survives without it.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/temporal_w15_cls_d4_fe4
+  - _self_
+
+experiment_name: brainco_xyz_grasp_prediction_temporal_w15_cls_d4_fe4_noprox
+
+wandb:
+  group: temporal_w15_cls_d4_fe4_noprox_grasp
+  tags: ["brainco", "xyz", "grasp_prediction", "temporal_former", "w15", "cls",
+         "former_d4", "frame_d4", "42joint", "noprox"]
+
+task:
+  sensor_channels: [0, 1, 2]
+  model_encoder:
+    frame_encoder:
+      in_chans: 3

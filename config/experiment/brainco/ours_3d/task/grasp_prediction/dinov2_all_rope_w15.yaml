@@ -1,0 +1,23 @@
+# @package _global_
+
+# Grasp prediction with 15-frame (150ms) windows instead of the 30-frame
+# default, so grasp and slip are evaluated on the same temporal footing.
+#
+# window_time is seconds at interpolating_freq=100, so 0.3 -> 0.15 halves the
+# window. Frame-wise encoder, unchanged otherwise.
+#
+# NOTE: not comparable to the 30-frame grasp numbers in
+# results_after_pretrain_*.md; a scratch run under this config is the baseline.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/dinov2_all_rope
+  - _self_
+
+experiment_name: brainco_xyz_grasp_prediction_all_rope_w15
+
+wandb:
+  group: all_pseudo_force_rope_pretrained_w15
+  tags: ["brainco", "xyz", "grasp_prediction", "all", "pretrained", "rope", "w15"]
+
+data:
+  window_time: 0.15

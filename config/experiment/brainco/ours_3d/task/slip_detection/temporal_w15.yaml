@@ -1,0 +1,53 @@
+# @package _global_
+
+# Slip detection with the temporal (frame encoder + temporal former) encoder.
+#
+# Built on the 15-frame slip config so the downstream window matches the
+# pretraining window exactly: sequence_length = 15 means encode() sends the
+# whole 15-frame window through the former in one pass (num_encoder_windows=1)
+# instead of encoding frames independently.
+#
+# The frame_encoder block must match the pretraining config
+# (config/algorithm/temporal_dinov2.yaml) tensor for tensor, otherwise
+# SLModule.load_encoder silently drops the mismatched keys and reports a
+# "pretrained" run with randomly initialized weights.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/dinov2_all_rope_w15
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_temporal_w15
+
+wandb:
+  group: temporal_w15_slip
+  tags: ["brainco", "xyz", "slip_detection", "temporal_former", "w15"]
+
+task:
+  model_encoder:
+    _target_: tactile_ssl.model.temporal_former_downstream.temporal_tiny_downstream
+    depth: 4
+    num_heads: 3
+    mlp_ratio: 4.0
+    num_register_tokens: 1
+    drop_path_rate: 0.0
+    frame_token_set: all
+    sequence_length: 15
+    frame_encoder:
+      _target_: tactile_ssl.model.angle_tiny
+      in_dim: 10
+      in_chans: 4
+      pos_in_dim: 10
+      pos_in_chans: 3
+      sequence_length: 1
+      time_chunk_size: 1
+      sensor_time_chunk_size: 1
+      pre_fusion_depth: 1
+      num_register_tokens: 1
+      pos_embed_fn: rope
+      rope_hand_offset: 10
+      debug_rope: false
+      with_masktoken: true
+      drop_path_rate: 0.0
+      drop_path_uniform: true
+      normalization: ~
+      causal: false

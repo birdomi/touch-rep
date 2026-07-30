@@ -1,0 +1,17 @@
+# @package _global_
+
+# temporal_w15 slip detection, reading the former's DINO-trained CLS token
+# instead of the learned AttentivePooler. Only task.pooling changes.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/temporal_w15
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_temporal_w15_cls
+
+wandb:
+  group: temporal_w15_cls_slip
+  tags: ["brainco", "xyz", "slip_detection", "temporal_former", "w15", "cls"]
+
+task:
+  pooling: cls

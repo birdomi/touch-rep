@@ -1,0 +1,55 @@
+# @package _global_
+# ACT, chunk 50, tuned against the overfitting seen in act_base:
+#   act_base (51 episodes, 84M params) reached train l1 0.14 but val l1_infer
+#   bottomed at 0.345 vs a 0.344 hold-state baseline — it never generalized.
+# Three changes, all aimed at the same failure:
+#   1. 51 -> 274 episodes: grasp_prediction shares the goal string with
+#      grasp_detection and is a *different* recording (verified: zero exact
+#      frame matches), so it is genuine extra data. grasp_prediction_t is byte
+#      -equivalent to grasp_prediction and is deliberately NOT included.
+#   2. photometric augmentation on the RGB stream.
+#   3. hidden_dim 512 -> 256 (84M -> ~22M params), less capacity to memorize.
+#
+#   python train_act.py +experiment=brainco/act/act_c50_v2.yaml
+defaults:
+  - override /data: brainco_act
+  - override /task: brainco_act
+  - _self_
+
+experiment_name: act_c50_v2
+ckpt_path: ./
+resume_id: ~
+
+fold: 0
+num_folds: 5
+
+data:
+  chunk_size: 50
+  frame_stride: 2
+  augment: true
+  dataset:
+    config:
+      data_roots:
+        - ${paths.data_root}/brainco/downstream/grasp_detection
+        - ${paths.data_root}/brainco/downstream/grasp_prediction
+  train_dataloader:
+    batch_size: 32
+
+task:
+  model:
+    hidden_dim: 256
+    dim_feedforward: 1024
+    enc_layers: 4
+    dec_layers: 6
+    cvae_enc_layers: 4
+  optim_cfg:
+    weight_decay: 1e-3
+
+trainer:
+  max_epochs: 40
+  validation_frequency: 2
+
+wandb:
+  project: brainco_act
+  group: act_c50_v2
+  tags: ["brainco", "act", "chunk50", "more_episodes", "augment"]

@@ -137,6 +137,9 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
         exclude_after_slip_end_frames = int(
             config.get("exclude_after_slip_end_frames", 0)
         )
+        # Keep only windows whose frames all carry the same label, so a window
+        # never straddles a slip boundary while being scored by its last frame.
+        require_uniform_label = bool(config.get("require_uniform_label", False))
         if input_window_frames <= 0:
             raise ValueError("input_window_frames must be positive")
         if input_window_stride < input_window_frames:
@@ -149,8 +152,9 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
             or exclude_after_slip_end_frames < 0
         ):
             raise ValueError("Slip transition exclusion margins must be >= 0")
-        max_values = torch.tensor([25000, 25000, 25000, 500000], dtype=torch.float32)
+        max_values = torch.tensor([1000, 1000, 1000, 100000], dtype=torch.float32)
         num_excluded_windows = 0
+        num_mixed_windows = 0
 
         for class_name in class_names:
             class_dir = root / class_name
@@ -225,6 +229,11 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
                     if excluded_frames[frame_indices].any():
                         num_excluded_windows += 1
                         continue
+                    if require_uniform_label:
+                        window_labels = labels[frame_indices]
+                        if window_labels.min() != window_labels.max():
+                            num_mixed_windows += 1
+                            continue
                     window_specs.append((window_start, frame_indices))
 
                 self.episode_data.append({
@@ -271,6 +280,8 @@ class BraincoXYZSlipDetectionDataset(data.Dataset):
             f"{len(self.windows)} samples (slip={num_slip}, "
             f"non-slip={len(self.windows) - num_slip}, "
             f"excluded_transition_windows={num_excluded_windows}, "
+            f"mixed_label_windows_dropped={num_mixed_windows} "
+            f"(require_uniform_label={require_uniform_label}), "
             f"force_delta={self.include_force_delta})"
         )
 

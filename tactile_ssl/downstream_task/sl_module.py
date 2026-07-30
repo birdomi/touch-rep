@@ -82,11 +82,18 @@ class SLModule(Module, nn.Module):
         # LayerNorms or any Transformer parameters.
         if self.train_input_conv1d:
             trainable_input_convs = []
-            for module_name, module in self.model_encoder.named_children():
-                projection = getattr(module, "proj", None)
-                if isinstance(projection, nn.Conv1d):
-                    projection.requires_grad_(True)
-                    trainable_input_convs.append(f"{module_name}.proj")
+            # The temporal composite nests its AngleTransformer one level down
+            # (model_encoder.frame_encoder); search both containers.
+            containers = [("", self.model_encoder)]
+            frame_encoder = getattr(self.model_encoder, "frame_encoder", None)
+            if frame_encoder is not None:
+                containers.append(("frame_encoder.", frame_encoder))
+            for prefix, container in containers:
+                for module_name, module in container.named_children():
+                    projection = getattr(module, "proj", None)
+                    if isinstance(projection, nn.Conv1d):
+                        projection.requires_grad_(True)
+                        trainable_input_convs.append(f"{prefix}{module_name}.proj")
             if not trainable_input_convs:
                 raise ValueError(
                     "train_input_conv1d=True, but the encoder has no direct "

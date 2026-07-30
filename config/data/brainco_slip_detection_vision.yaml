@@ -1,0 +1,58 @@
+train_dataloader:
+  batch_size: 64
+  num_workers: 8
+  shuffle: true
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: false
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+sensor: brainco_slip_detection_vision
+class_names:
+  0: non-slip
+  1: slip
+train_data_budget: 1.0
+val_data_budget: 1.0
+# Draw slip and non-slip windows with equal probability in the train loader.
+# Validation keeps the original class distribution.
+balanced_sampling: true
+
+# Augmentation is applied to the train split only; the val split always uses
+# the deterministic resize path.
+augment_train: true
+img_size: 224
+crop_mode: resize        # resize | bottom_center
+crop_size: 320           # only used by bottom_center
+num_frames_per_sample: 3
+
+dataset:
+  _target_: tactile_ssl.data.brainco_slip_vision_dataset.BraincoSlipVisionDataset
+  config:
+    camera_key: color_0
+    crop_mode: ${data.crop_mode}
+    crop_size: ${data.crop_size}
+    augment_pad: 16
+    augment_jitter: 0.2
+    # Same window layout as config/data/brainco_xyz_slip_detection.yaml, so the
+    # vision baseline is scored on the same samples as the tactile encoders.
+    input_window_frames: 3
+    input_window_stride: 3
+    # Keep windows adjacent to slip onset and offset.
+    exclude_before_slip_start_frames: 0
+    exclude_after_slip_end_frames: 0
+    # Object folders to include. Keep this explicit so ID and leave-one-object-out
+    # experiments always use the same four-object universe.
+    classes: [slip_box, slip_doll, slip_evacase, slip_plastic]
+  data_path: ${paths.data_root}/brainco/downstream/slip_data_v2
+  num_frames_per_sample: ${data.num_frames_per_sample}
+  img_size: ${data.img_size}
+
+# When null, train_task_brainco_vision.py performs an episode-level K-fold split.
+val_dataset: null

@@ -1,0 +1,35 @@
+# @package _global_
+
+# Slip detection with 15-frame (150ms) input windows instead of 3 (30ms).
+#
+# The encoder is frame-wise (sequence_length=1), so BraincoAngleGraspSLModule
+# encodes each of the 15 frames independently and MeanPoolProbe averages the
+# resulting window tokens; nothing about the encoder changes, only how much
+# time the probe sees.
+#
+# input_window_stride tracks input_window_frames because the dataset requires
+# stride >= frames (non-overlapping windows), so this run has ~5x fewer, longer
+# samples than the 3-frame protocol.
+#
+# NOTE: a window is labelled by its LAST frame, so a longer window is more
+# likely to straddle a slip boundary -- a 15-frame window ending one frame
+# after onset is labelled "slip" while 14/15 of its frames are not. Results are
+# therefore NOT comparable to the 3-frame numbers in
+# results_after_pretrain_20260728_072521.md; a scratch run under this same
+# config is the only valid baseline.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/dinov2_all_rope
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_all_rope_w15
+
+wandb:
+  group: all_pseudo_force_rope_pretrained_w15
+  tags: ["brainco", "xyz", "slip_detection", "all", "pretrained", "rope", "w15"]
+
+data:
+  dataset:
+    config:
+      input_window_frames: 15
+      input_window_stride: 15

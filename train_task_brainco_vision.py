@@ -1,11 +1,15 @@
 """
-Vision-only grasp detection training script.
+Vision-only grasp detection / slip detection training script.
 Uses pre-trained ResNet18 on RGB frames from {episode}/colors/.
 No tactile input.
 
 Usage:
   python train_task_brainco_vision.py +experiment=brainco/task/grasp_detection/resnet18
   python train_task_brainco_vision.py +experiment=brainco/task/grasp_detection/resnet18 --all_split --num_folds 5
+
+  # slip detection (episode-level K-fold, class-balanced train sampling)
+  python train_task_brainco_vision.py +experiment=brainco/task/slip_detection/resnet18
+  python train_task_brainco_vision.py +experiment=brainco/task/slip_detection/resnet18 --all_split --num_folds 4
 """
 
 import os
@@ -30,6 +34,8 @@ from tactile_ssl.trainer import Trainer
 from tactile_ssl.data.brainco_grasp_vision_dataset import BraincoGraspVisionDataset
 from tactile_ssl.downstream_task.brainco_grasp_vision_sl import ResNet18GraspModule
 
+SLIP_VISION_SENSOR = "brainco_slip_detection_vision"
+
 logger = get_pylogger(__name__)
 
 OmegaConf.register_new_resolver("int_multiply", lambda a, b: int(a * b))
@@ -52,7 +58,213 @@ def init_wandb(cfg: DictConfig):
     return wandb
 
 
+# ── sampling ──────────────────────────────────────────────────────────────
+
+class _EqualClassSampler(data.Sampler[int]):
+    """Sample the same number of items from every class each epoch."""
+
+    def __init__(self, labels: torch.Tensor, generator: torch.Generator):
+        self.generator = generator
+        classes = labels.unique(sorted=True)
+        if len(classes) < 2:
+            raise ValueError(
+                "Balanced sampling requires at least two classes in the train split"
+            )
+        self.class_indices = [
+            torch.nonzero(labels == class_id, as_tuple=False).flatten()
+            for class_id in classes
+        ]
+        self.samples_per_class = len(labels) // len(self.class_indices)
+        self.num_samples = self.samples_per_class * len(self.class_indices)
+
+    def __iter__(self):
+        sampled = []
+        for indices in self.class_indices:
+            if self.samples_per_class <= len(indices):
+                positions = torch.randperm(
+                    len(indices), generator=self.generator
+                )[: self.samples_per_class]
+            else:
+                positions = torch.randint(
+                    len(indices),
+                    (self.samples_per_class,),
+                    generator=self.generator,
+                )
+            sampled.append(indices[positions])
+        epoch_indices = torch.cat(sampled)
+        order = torch.randperm(len(epoch_indices), generator=self.generator)
+        return iter(epoch_indices[order].tolist())
+
+    def __len__(self):
+        return self.num_samples
+
+
+def _window_labels(dataset: data.Dataset, indices) -> torch.Tensor:
+    """Read window labels without decoding any images."""
+    base, offsets = dataset, list(indices)
+    while isinstance(base, data.Subset):
+        offsets = [base.indices[i] for i in offsets]
+        base = base.dataset
+    return torch.tensor(
+        [int(base.windows[i]["label"].item()) for i in offsets], dtype=torch.long
+    )
+
+
+def _balanced_train_loader(
+    train_dataset: data.Dataset,
+    data_cfg: DictConfig,
+    generator: torch.Generator,
+) -> data.DataLoader:
+    """Build a train loader with optional equal-class sampling."""
+    loader_cfg = dict(data_cfg.train_dataloader)
+    if not data_cfg.get("balanced_sampling", False):
+        return data.DataLoader(train_dataset, generator=generator, **loader_cfg)
+
+    labels = _window_labels(train_dataset, range(len(train_dataset)))
+    classes, counts = labels.unique(sorted=True, return_counts=True)
+    sampler = _EqualClassSampler(labels, generator)
+    loader_cfg.pop("shuffle", None)
+    logger.info(
+        "Balanced train sampling enabled: "
+        f"counts={dict(zip(classes.tolist(), counts.tolist()))}, "
+        f"sampled_per_class={sampler.samples_per_class}, "
+        f"samples_per_epoch={len(sampler)}"
+    )
+    return data.DataLoader(train_dataset, sampler=sampler, **loader_cfg)
+
+
 # ── dataloader ────────────────────────────────────────────────────────────
+
+# K-fold changes only the train/val index split, never the dataset itself, so
+# building it once per process avoids re-parsing every episode for each fold.
+_DATASET_CACHE: dict = {}
+
+
+def _instantiate_dataset_cached(dataset_cfg: DictConfig, **overrides):
+    key = (OmegaConf.to_yaml(dataset_cfg, resolve=True), tuple(sorted(overrides.items())))
+    if key not in _DATASET_CACHE:
+        _DATASET_CACHE[key] = hydra.utils.instantiate(dataset_cfg, **overrides)
+    else:
+        logger.info("Reusing dataset built for an earlier fold.")
+    return _DATASET_CACHE[key]
+
+
+def get_dataloader_slip_vision(cfg: DictConfig):
+    """Episode-level K-fold split for the RGB slip-detection dataset.
+
+    Mirrors train_task_brainco_angle.py: the episode order is shuffled with
+    ``split_seed`` and cut into contiguous folds, so the vision baseline sees
+    the same episode partition as the tactile encoders.
+    """
+    import random
+
+    data_cfg  = cfg.data
+    fold      = int(cfg.get("fold", 0))
+    num_folds = int(cfg.get("num_folds", 5))
+    seed      = int(cfg.get("split_seed", cfg.get("seed", 42)))
+    val_fold  = fold % num_folds
+
+    if data_cfg.get("dataset") is None:
+        raise ValueError("data.dataset must be set for the slip vision task")
+
+    # Augmentation must not leak into validation, so the two splits read from
+    # separate instances that share an identical window layout.
+    dataset = _instantiate_dataset_cached(data_cfg.dataset, augment=False)
+    augment_train = bool(data_cfg.get("augment_train", False))
+    train_source = (
+        _instantiate_dataset_cached(data_cfg.dataset, augment=True)
+        if augment_train else dataset
+    )
+    if len(train_source.windows) != len(dataset.windows):
+        raise RuntimeError(
+            "Augmented and evaluation datasets disagree on window count: "
+            f"{len(train_source.windows)} vs {len(dataset.windows)}"
+        )
+
+    ep_window_start: dict = {}
+    current = 0
+    for ep in dataset.episode_data:
+        ep_window_start[ep["path"]] = current
+        current += len(ep["window_starts"])
+
+    all_episodes = list(dataset.episode_data)
+    rng = random.Random(seed)
+    rng.shuffle(all_episodes)
+    n_ep = len(all_episodes)
+
+    def _fold_range(k):
+        size = n_ep // num_folds
+        start = k * size
+        end   = start + size if k < num_folds - 1 else n_ep
+        return range(start, end)
+
+    val_range = _fold_range(val_fold)
+    train_indices, val_indices = [], []
+    train_ep_names, val_ep_names = [], []
+
+    for rank, ep in enumerate(all_episodes):
+        start = ep_window_start[ep["path"]]
+        wins  = list(range(start, start + len(ep["window_starts"])))
+        name  = Path(ep["path"]).parent.name + "/" + Path(ep["path"]).name
+        if rank in val_range:
+            val_indices.extend(wins);   val_ep_names.append(name)
+        else:
+            train_indices.extend(wins); train_ep_names.append(name)
+
+    CLASS_NAMES = {
+        int(label): str(name)
+        for label, name in data_cfg.get("class_names", {0: "non-slip", 1: "slip"}).items()
+    }
+
+    lines = [
+        f"\n=== Vision Slip Episode Split  (val_fold={val_fold}/{num_folds}, "
+        f"total={n_ep}, seed={seed}) ===",
+        f"  Train: {len(train_ep_names)} episodes  (augment={augment_train})",
+        *[f"    [train] {n}" for n in train_ep_names],
+        f"  Val:   {len(val_ep_names)} episodes",
+        *[f"    [val]   {n}" for n in val_ep_names],
+        "=== Class Distribution ===",
+    ]
+    for tag, idx in [("Train", train_indices), ("Val", val_indices)]:
+        dist = Counter(_window_labels(dataset, idx).tolist())
+        lines.append(f"  {tag}:")
+        for cls in sorted(dist):
+            cnt = dist[cls]
+            lines.append(
+                f"    [{cls}] {CLASS_NAMES.get(cls, str(cls)):8s}: {cnt:5d}  "
+                f"({100*cnt/len(idx):.1f}%)"
+            )
+    lines.append("=" * 26)
+
+    split_log = "\n".join(lines)
+    print(split_log)
+    (Path(cfg.paths.output_dir) / f"split_fold{val_fold}_vision_slip.txt").write_text(split_log)
+
+    g = torch.Generator()
+    g.manual_seed(int(cfg.get("seed", 42)))
+
+    train_dset = data.Subset(train_source, train_indices)
+    val_dset   = data.Subset(dataset, val_indices)
+
+    if data_cfg.get("train_data_budget", 1.0) < 1.0:
+        budget = int(len(train_dset) * data_cfg.train_data_budget)
+        train_dset, _ = data.random_split(train_dset, [budget, len(train_dset) - budget], generator=g)
+    if data_cfg.get("val_data_budget", 1.0) < 1.0:
+        budget = int(len(val_dset) * data_cfg.val_data_budget)
+        val_dset, _ = data.random_split(val_dset, [budget, len(val_dset) - budget], generator=g)
+
+    print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val")
+
+    train_loader = _balanced_train_loader(train_dset, data_cfg, g)
+    val_loader   = data.DataLoader(val_dset, **dict(data_cfg.val_dataloader))
+    return train_loader, val_loader
+
+
+def get_dataloaders(cfg: DictConfig):
+    if cfg.data.sensor == SLIP_VISION_SENSOR:
+        return get_dataloader_slip_vision(cfg)
+    return get_dataloader_vision(cfg)
+
 
 def get_dataloader_vision(cfg: DictConfig):
     """K-fold contiguous episode split for the vision dataset."""
@@ -208,6 +420,32 @@ def get_dataloader_vision(cfg: DictConfig):
     return train_loader, val_loader
 
 
+# ── model ─────────────────────────────────────────────────────────────────
+
+def build_model(cfg: DictConfig):
+    """Slip runs are configured through cfg.task; grasp runs use top-level keys."""
+    if cfg.data.sensor == SLIP_VISION_SENSOR:
+        return hydra.utils.instantiate(cfg.task)
+
+    optim_cfg = partial(
+        torch.optim.AdamW,
+        lr=float(cfg.get("lr", 3e-4)),
+        weight_decay=float(cfg.get("weight_decay", 1e-4)),
+    )
+    scheduler_cfg = partial(
+        torch.optim.lr_scheduler.CosineAnnealingLR,
+        T_max=cfg.trainer.max_epochs,
+    ) if cfg.get("use_scheduler", True) else None
+
+    return ResNet18GraspModule(
+        pretrained=cfg.get("pretrained", True),
+        freeze_backbone=cfg.get("freeze_backbone", False),
+        optim_cfg=optim_cfg,
+        scheduler_cfg=scheduler_cfg,
+        num_classes=int(cfg.get("num_classes", 2)),
+    )
+
+
 # ── train ─────────────────────────────────────────────────────────────────
 
 def train(cfg: DictConfig) -> dict:
@@ -227,26 +465,10 @@ def train(cfg: DictConfig) -> dict:
     torch.backends.cudnn.benchmark = True
 
     logger.info("Building vision dataloader ...")
-    train_loader, val_loader = get_dataloader_vision(cfg)
+    train_loader, val_loader = get_dataloaders(cfg)
 
     logger.info("Building ResNet18 model ...")
-    optim_cfg = partial(
-        torch.optim.AdamW,
-        lr=float(cfg.get("lr", 3e-4)),
-        weight_decay=float(cfg.get("weight_decay", 1e-4)),
-    )
-    scheduler_cfg = partial(
-        torch.optim.lr_scheduler.CosineAnnealingLR,
-        T_max=cfg.trainer.max_epochs,
-    ) if cfg.get("use_scheduler", True) else None
-
-    model = ResNet18GraspModule(
-        pretrained=cfg.get("pretrained", True),
-        freeze_backbone=cfg.get("freeze_backbone", False),
-        optim_cfg=optim_cfg,
-        scheduler_cfg=scheduler_cfg,
-        num_classes=int(cfg.get("num_classes", 2)),
-    )
+    model = build_model(cfg)
 
     trainer = Trainer(wandb_logger=wb, **cfg.trainer)
     trainer.fit(model, train_loader, val_loader, ckpt_path=cfg.ckpt_path)
@@ -254,11 +476,24 @@ def train(cfg: DictConfig) -> dict:
 
     last = getattr(model, "last_val_metrics", {})
     best = getattr(model, "best_val_metrics", {})
+    epoch_avg = getattr(model, "epoch_avg_val_metrics", {})
+
+    def _line(tag, metrics):
+        # Slip modules report balanced accuracy; grasp modules report raw accuracy.
+        acc = metrics.get("balanced_accuracy", metrics.get("accuracy", float("nan")))
+        return (
+            f"  {tag} — Acc: {acc:.4f}"
+            f"  F1: {metrics.get('f1', float('nan')):.4f}"
+        )
+
     print(f"\n{'='*40}")
     print("  VISION TRAINING COMPLETE")
     print(f"{'='*40}")
-    print(f"  Last  — Acc: {last.get('accuracy', float('nan')):.4f}  F1: {last.get('f1', float('nan')):.4f}")
-    print(f"  Best  — Acc: {best.get('accuracy', float('nan')):.4f}  F1: {best.get('f1', float('nan')):.4f}")
+    print(_line("Last    ", last))
+    print(_line("Best    ", best))
+    if epoch_avg:
+        print(_line("EpochAvg", epoch_avg))
+        print(f"  EpochAvg epochs: {epoch_avg.get('epochs', [])}")
     print(f"{'='*40}\n")
 
     return last
@@ -301,7 +536,7 @@ def main(cfg: DictConfig):
         accuracies, f1s = [], []
         for fold in range(num_folds):
             m   = all_metrics.get(fold, {})
-            acc = m.get("accuracy", float("nan"))
+            acc = m.get("balanced_accuracy", m.get("accuracy", float("nan")))
             f1  = m.get("f1",       float("nan"))
             accuracies.append(acc)
             f1s.append(f1)

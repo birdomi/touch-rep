@@ -29,6 +29,9 @@ class AngleDinov2Module(BraincoDINOv2Module):
     and can be changed for datasets such as the pseudo-force XYZ dataset.
     """
 
+    # Extra wandb keys logged by subclasses that add auxiliary objectives.
+    extra_log_keys: tuple = ()
+
     def __init__(
         self,
         classification_loss: bool = False,
@@ -56,6 +59,15 @@ class AngleDinov2Module(BraincoDINOv2Module):
         accuracy = (logits.argmax(dim=1) == labels).float().mean()
         return loss, accuracy
 
+    def _extra_losses(self, **_context) -> Dict[str, tuple]:
+        """Auxiliary objectives contributed by subclasses.
+
+        Returns ``{name: (loss, weight)}``. Each entry is added to
+        ``result["loss"]`` scaled by ``weight`` and exposed under ``name`` so
+        ``training_step`` can log it. The base module has none.
+        """
+        return {}
+
     def log_on_batch_end(self, outputs, stage: str = "train", trainer_instance=None):
         super().log_on_batch_end(outputs, stage=stage, trainer_instance=trainer_instance)
         if trainer_instance is None:
@@ -63,7 +75,7 @@ class AngleDinov2Module(BraincoDINOv2Module):
         if stage == "train" and not trainer_instance.should_log:
             return
         step = trainer_instance.step
-        for key in ("classification_loss", "classification_accuracy"):
+        for key in ("classification_loss", "classification_accuracy", *self.extra_log_keys):
             if key in outputs:
                 trainer_instance.wandb.log({
                     f"{stage}/{key}": outputs[key],
@@ -122,8 +134,11 @@ class AngleDinov2Module(BraincoDINOv2Module):
         n_total = n_x + n_p
         pos_ibot = full_ibot[..., :n_p]
 
+        # Flatten before nonzero: on a 2-D mask nonzero returns (row, col)
+        # pairs, and flattening those interleaves row and column numbers into
+        # what is then used as a flat index into (b n).
         ibot_masks_flat   = full_ibot.flatten(0, 1)
-        ibot_mask_indices = torch.nonzero(ibot_masks_flat).flatten()
+        ibot_mask_indices = torch.nonzero(ibot_masks_flat.flatten()).flatten()
         num_ibot_tokens   = len(ibot_mask_indices)
 
         student_global_dict = self.student_encoder_dict["backbone"].forward_features(
@@ -264,6 +279,15 @@ class AngleDinov2Module(BraincoDINOv2Module):
             result["classification_loss"] = cls_loss
             result["classification_accuracy"] = accuracy
 
+        for name, (value, weight) in self._extra_losses(
+            xs=xs,
+            student_global_dict=student_global_dict,
+            global_masks=global_masks,
+            ibot_masks=ibot_masks,
+        ).items():
+            result["loss"] = result["loss"] + weight * value
+            result[name] = value
+
         return result
 
     def training_step(self, batch: Dict[str, Any], batch_idx: int) -> Dict:
@@ -294,6 +318,9 @@ class AngleDinov2Module(BraincoDINOv2Module):
         if "classification_loss" in fwd:
             output["classification_loss"] = fwd["classification_loss"].item()
             output["classification_accuracy"] = fwd["classification_accuracy"]
+        for key in self.extra_log_keys:
+            if key in fwd:
+                output[key] = fwd[key].item()
 
         embedding     = None
         cls_embedding = None

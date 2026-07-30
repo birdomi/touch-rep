@@ -1,0 +1,56 @@
+# @package _global_
+
+# JEPA-style future-tactile prediction on top of the *single-frame* hp1 winner
+# (dinov2_pretraining_all_rope_v2_hp1), not on top of temp3.
+#
+# The existing prediction variant, dinov2_prediction_local_v2_hp1, inherits from
+# dinov2_prediction -> dinov2_pretraining_all_rope_temp3, i.e. a 3-frame encoder
+# (sequence_length 3, context_window_size 3, window_size 6). This config keeps
+# the 1-frame encoder that scored best in
+# scripts/results_after_pretrain_20260728_072521.md and only adds the prediction
+# objective:
+#
+#   context_window_size 1   (== encoder.sequence_length / time_chunk_size)
+#   window_size         2   (AngleDINOv2PredictionModule needs 2 * context)
+#                           frame 0 -> DINO/predictor context, frame 1 -> target
+#
+# Everything else (out_dim 4096, drop_path 0.0, warmup 10, ibot [0.3,0.7],
+# num_local_masks 8, window_stride 3, lr, batch size, 100 epochs) is inherited
+# unchanged from dinov2_pretraining_all_rope_v2_hp1.
+#
+# The predictor block and its loss settings match dinov2_prediction, and
+# prediction_context is `local` to match the one prediction recipe already
+# evaluated (dinov2_prediction_local_v2_hp1).
+
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_pretraining_all_rope_v2_hp1
+  - _self_
+
+experiment_name: dinov2_prediction_local_all_pseudo_force_${model_size}_rope_v2_hp1_ctx1
+
+wandb:
+  group: dino_prediction_local_all_pseudo_force_${model_size}_rope_v2_hp1_ctx1
+  tags: ["all", "pseudo_force", "4d", "${model_size}", "rope", "prediction",
+         "local_view", "v2", "hp1", "ctx1"]
+
+data:
+  # Frame 0 is the DINO/predictor context; frame 1 is the prediction target.
+  window_size: 2
+  # Unchanged from hp1.
+  window_stride: 3
+
+algorithm:
+  _target_: tactile_ssl.algorithm.AngleDINOv2PredictionModule
+  context_window_size: 1
+  temporal_tactile_loss_weight: 10.0
+  prediction_loss_type: smooth_l1
+  prediction_context: local
+
+  predictor:
+    _partial_: true
+    _target_: tactile_ssl.model.JEPATokenPredictor
+    predictor_dim: 192
+    depth: 2
+    num_heads: 3
+    mlp_ratio: 4.0
+    dropout: 0.0

@@ -180,8 +180,11 @@ def _compute_multichannel_contact_stats(
     sequences,
     num_channels: int,
     include_force_delta: bool = False,
+    fingertip_only: bool = False,
+    channel_indices=None,
 ):
-    output_channels = num_channels * (2 if include_force_delta else 1)
+    num_kept = len(channel_indices) if channel_indices else num_channels
+    output_channels = num_kept * (2 if include_force_delta else 1)
     channel_sum = np.zeros(output_channels, dtype=np.float64)
     channel_sq_sum = np.zeros(output_channels, dtype=np.float64)
     count = 0
@@ -191,8 +194,18 @@ def _compute_multichannel_contact_stats(
             delta = np.zeros_like(contact)
             delta[1:] = contact[1:] - contact[:-1]
             contact = np.concatenate((contact, delta), axis=-1)
+        if fingertip_only:
+            from tactile_ssl.data.pseudo_force_tactile import FINGERTIP_COLUMNS
 
-        for hand_contact in (contact[:, :21], contact[:, 21:]):
+            contact = contact[:, FINGERTIP_COLUMNS]
+        if channel_indices:
+            idx = list(channel_indices)
+            if include_force_delta:
+                idx += [c + num_channels for c in channel_indices]
+            contact = contact[..., idx]
+
+        half = contact.shape[1] // 2
+        for hand_contact in (contact[:, :half], contact[:, half:]):
             values = hand_contact.reshape(-1, output_channels).astype(
                 np.float64, copy=False
             )
@@ -229,6 +242,8 @@ def get_dataloaders_all_pseudo_force_based(cfg: DictConfig):
         "train_val_split": float(data_cfg.get("train_val_split", 0.9)),
         "sensor_output_key": str(cfg.algorithm.get("sensor_input_key", "joint_contact")),
         "include_force_delta": bool(data_cfg.get("include_force_delta", False)),
+        "fingertip_only": bool(data_cfg.get("fingertip_only", False)),
+        "sensor_channels": list(data_cfg.get("sensor_channels") or []) or None,
     }
 
     train_dsets, val_dsets, all_train_sequences = [], [], []
@@ -241,14 +256,21 @@ def get_dataloaders_all_pseudo_force_based(cfg: DictConfig):
         all_train_sequences.extend(train_ds._sequences)
         logger.info(f"  {name}: train={len(train_ds)} val={len(val_ds)}")
 
+    sensor_channels = dataset_kwargs["sensor_channels"]
+    channel_indices = (
+        [FORCE_CHANNELS.index(c) for c in sensor_channels]
+        if sensor_channels else None
+    )
     sensor_mean, sensor_std = _compute_multichannel_contact_stats(
         all_train_sequences,
         len(FORCE_CHANNELS),
         include_force_delta=dataset_kwargs["include_force_delta"],
+        fingertip_only=dataset_kwargs["fingertip_only"],
+        channel_indices=channel_indices,
     )
-    channel_order = FORCE_CHANNELS
+    channel_order = tuple(sensor_channels) if sensor_channels else FORCE_CHANNELS
     if dataset_kwargs["include_force_delta"]:
-        channel_order = FORCE_CHANNELS + tuple(f"delta_{name}" for name in FORCE_CHANNELS)
+        channel_order = channel_order + tuple(f"delta_{name}" for name in channel_order)
     logger.info(
         f"Pseudo-force channel order={channel_order}, "
         f"mean={sensor_mean}, std={sensor_std}"
@@ -289,14 +311,22 @@ def get_dataloaders_compact_pseudo_force_based(cfg: DictConfig):
         "train_val_split": float(data_cfg.get("train_val_split", 0.9)),
         "sensor_output_key": str(cfg.algorithm.get("sensor_input_key", "joint_contact")),
         "include_force_delta": bool(data_cfg.get("include_force_delta", False)),
+        "fingertip_only": bool(data_cfg.get("fingertip_only", False)),
+        "sensor_channels": list(data_cfg.get("sensor_channels") or []) or None,
     }
     train_dset = CompactPseudoForceDataset(split="train", **dataset_kwargs)
     val_dset = CompactPseudoForceDataset(split="val", **dataset_kwargs)
 
+    _sensor_channels = dataset_kwargs["sensor_channels"]
     sensor_mean, sensor_std = _compute_multichannel_contact_stats(
         train_dset._sequences,
         len(FORCE_CHANNELS),
         include_force_delta=dataset_kwargs["include_force_delta"],
+        fingertip_only=dataset_kwargs["fingertip_only"],
+        channel_indices=(
+            [FORCE_CHANNELS.index(c) for c in _sensor_channels]
+            if _sensor_channels else None
+        ),
     )
     with open_dict(cfg):
         cfg.data.normalization.mean = sensor_mean

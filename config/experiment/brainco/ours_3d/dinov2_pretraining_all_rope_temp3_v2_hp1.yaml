@@ -1,0 +1,42 @@
+# @package _global_
+
+# Hyperparameter variant 1 on top of dinov2_pretraining_all_rope_temp3_v2.
+#
+# Changes vs. the v2 baseline:
+#   dino_head.out_dim   65536 -> 4096          (ImageNet-scale default was far
+#                                               too large for this token count)
+#   drop_path_rate      0.3   -> 0.0           (0.3 targets ViT-L/g, not 192-d tiny)
+#   warmup_epochs       1     -> 10            (DINOv2 standard; 1/100 destabilises)
+#   ibot_mask_ratio     [0.1,0.5] -> [0.3,0.7] (harder masked-token task)
+#   window_stride       1     -> 3             (1/3 the windows; less redundancy)
+#   window_size         3                      (unchanged; matches sequence_length 3)
+#   num_local_masks     8     -> 8             (unchanged, stated for the record)
+
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_pretraining_all_rope_temp3_v2
+  - _self_
+
+experiment_name: dinov2_all_pseudo_force_${model_size}_rope_temporal3_v2_hp1
+
+wandb:
+  group: dino_all_pseudo_force_${model_size}_rope_temporal3_v2_hp1
+  tags: ["all", "pseudo_force", "4d", "${model_size}", "rope", "temporal3",
+         "v2", "hp1"]
+
+data:
+  window_size: 3
+  # Stride 3 makes the 3-frame windows non-overlapping (was fully overlapping).
+  window_stride: 3
+
+algorithm:
+  ibot_mask_ratio: [0.3, 0.7]
+  num_local_masks: 8
+
+  encoder:
+    drop_path_rate: 0.0
+
+  dino_head:
+    out_dim: 4096
+
+  lr_scheduler_cfg:
+    warmup_epochs: 10

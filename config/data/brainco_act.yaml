@@ -1,0 +1,65 @@
+train_dataloader:
+  batch_size: 32
+  num_workers: 8
+  shuffle: true
+  drop_last: true
+  pin_memory: true
+  persistent_workers: true
+
+val_dataloader:
+  batch_size: 32
+  num_workers: 4
+  shuffle: false
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+sensor: brainco_act
+train_data_budget: 1.0
+val_data_budget: 1.0
+
+# Number of future actions predicted per observation (ACT's action chunk).
+chunk_size: 50
+# Keep every n-th timestep as a sample start. 1 = every frame.
+frame_stride: 1
+# Only color_0 exists on disk for the BrainCo episodes; data.json also lists
+# color_1..3 but those files were never recorded.
+camera_names: ["color_0"]
+image_height: 240
+image_width: 320
+use_tactile: true
+# Training-only augmentation (validation samples bypass it via set_eval_indices).
+augment: false
+# Colour jitter strength. 0.2 measured better than 0.3 on grasp episodes.
+augment_color_jitter: 0.2
+# Random image shift as a fraction of the frame. Measured to HURT (it breaks
+# image/robot-pose alignment), so it is off by default.
+augment_translate: 0.0
+# Gaussian noise on the normalized qpos input, training only. Measured to HURT
+# — qpos is the strongest predictor of near-future actions. 0 disables.
+qpos_noise_std: 0.0
+
+dataset:
+  _target_: tactile_ssl.data.brainco_act_dataset.BraincoACTDataset
+  augment: ${data.augment}
+  config:
+    chunk_size: ${data.chunk_size}
+    frame_stride: ${data.frame_stride}
+    camera_names: ${data.camera_names}
+    image_height: ${data.image_height}
+    image_width: ${data.image_width}
+    use_tactile: ${data.use_tactile}
+    augment_color_jitter: ${data.augment_color_jitter}
+    augment_translate: ${data.augment_translate}
+    qpos_noise_std: ${data.qpos_noise_std}
+    state_keys: ["left_arm", "right_arm", "left_ee", "right_ee"]
+    action_keys: ["left_arm", "right_arm", "left_ee", "right_ee"]
+    # Cap the number of episodes for quick smoke tests (null = all).
+    max_episodes: null
+    data_roots:
+      - ${paths.data_root}/brainco/downstream/grasp_detection
+  data_path: ${paths.data_root}/brainco/downstream/grasp_detection
+
+# Set to a second BraincoACTDataset config for a fixed validation set.
+# When null, train_act.py performs episode-level K-fold splitting.
+val_dataset: null

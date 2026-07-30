@@ -1,0 +1,70 @@
+# @package _global_
+
+task_name: act
+experiment_name: brainco_${task_name}
+seed: 42
+
+hydra:
+  job:
+    id: ${now:%Y.%m.%d}_${now:%H-%M}
+  run:
+    dir: ${paths.log_dir}/brainco_act/${hydra.job.id}_${experiment_name}
+
+wandb:
+  project: brainco_act
+  group: ~
+  tags: ["brainco", "act", "imitation"]
+
+trainer:
+  max_epochs: 100
+  validation_frequency: 5
+  checkpoint_frequency: 25
+  log_frequency: 20
+  grad_clip_norm: 10.0
+  sanity_validate: false
+  save_checkpoint_dir: ${paths.output_dir}/checkpoints
+
+task:
+  _target_: tactile_ssl.downstream_task.ACTModule
+
+  # KL weight on the CVAE style latent. ACT's default is 10.
+  kl_weight: 10.0
+  # ImageNet trunks fine-tune ~10x slower than the fresh transformer.
+  lr_backbone: 1e-5
+  checkpoint: ~
+
+  model:
+    _target_: tactile_ssl.model.act.ACTPolicy
+    # state_dim / action_dim / chunk_size / num_cameras are overwritten from
+    # the dataset in train_act.py, so they stay consistent with the data.
+    state_dim: 26
+    action_dim: 26
+    chunk_size: ${data.chunk_size}
+    num_cameras: 1
+    hidden_dim: 512
+    num_heads: 8
+    dim_feedforward: 3200
+    enc_layers: 4
+    dec_layers: 7
+    cvae_enc_layers: 4
+    dropout: 0.1
+    latent_dim: 32
+    backbone: resnet18
+    pretrained_backbone: true
+    frozen_backbone_bn: true
+    use_tactile: ${data.use_tactile}
+    num_tactile_sensors: 10
+    tactile_channels: 4
+
+  optim_cfg:
+    _partial_: true
+    _target_: torch.optim.AdamW
+    lr: 1e-4
+    weight_decay: 1e-4
+
+  scheduler_cfg:
+    _partial_: true
+    _target_: tactile_ssl.model.custom_scheduler.WarmupCosineScheduler
+    start_lr: 1e-6
+    warmup_epochs: 5
+    final_lr: 1e-6

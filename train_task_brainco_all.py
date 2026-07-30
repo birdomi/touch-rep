@@ -366,12 +366,12 @@ def main(cfg: DictConfig):
         print(f"\n{'='*60}")
         print(f"  K-FOLD CROSS-VALIDATION SUMMARY ({label})")
         print(f"{'='*60}")
-        print(f"{'Fold':>6}  {'Accuracy':>10}  {'F1 Score':>10}")
+        print(f"{'Fold':>6}  {'Bal Acc':>10}  {'F1 Score':>10}")
         print(f"{'-'*34}")
         accuracies, f1s = [], []
         for fold in range(num_folds):
             m = all_metrics.get(fold, {}).get(tag, {})
-            acc = m.get("accuracy", float("nan"))
+            acc = m.get("balanced_accuracy", m.get("accuracy", float("nan")))
             f1  = m.get("f1",       float("nan"))
             accuracies.append(acc)
             f1s.append(f1)

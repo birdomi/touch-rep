@@ -5,7 +5,7 @@ classification_num_classes: 6
 classification_target_key: classification_id
 classification_loss_weight: 1.0
 
-ibot_mask_ratio: [0.1, 0.5]
+ibot_mask_ratio: [0.3, 0.6]
 
 encoder:
   _target_: tactile_ssl.model.angle_tiny

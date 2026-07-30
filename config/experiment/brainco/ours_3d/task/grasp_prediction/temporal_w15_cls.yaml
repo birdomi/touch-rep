@@ -1,0 +1,17 @@
+# @package _global_
+
+# temporal_w15 grasp prediction, reading the former's DINO-trained CLS token
+# instead of the learned AttentivePooler. Only task.pooling changes.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/temporal_w15
+  - _self_
+
+experiment_name: brainco_xyz_grasp_prediction_temporal_w15_cls
+
+wandb:
+  group: temporal_w15_cls_grasp
+  tags: ["brainco", "xyz", "grasp_prediction", "temporal_former", "w15", "cls"]
+
+task:
+  pooling: cls

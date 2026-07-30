@@ -1,0 +1,33 @@
+# @package _global_
+
+# Grasp-prediction counterpart of
+# slip_detection/temporal_w15_cls_d4_fe4_jointonly: temporal_w15_cls_d4_fe4 with
+# frame_encoder.input_streams: pos, for checkpoints from the
+# dinov2_temporal_w15_jointonly_* pretraining line.
+#
+# input_streams MUST match the checkpoint. Those checkpoints still contain
+# sensor_embed/sensor_block tensors that were never fed and so never trained;
+# the default input_streams='both' would load them and route real BrainCo force
+# through an untrained path into a former that has never seen a sensor token.
+#
+# This arm answers what the pose stream alone is worth: any gap to the prox arms
+# at the same epoch is what the tactile channel actually contributes.
+#
+# Everything else is inherited: former depth 4, frame encoder depth 4,
+# CLS-frames former input, CLS readout, 42-joint pose layout, 15-frame window.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/temporal_w15_cls_d4_fe4
+  - _self_
+
+experiment_name: brainco_xyz_grasp_prediction_temporal_w15_cls_d4_fe4_jointonly
+
+wandb:
+  group: temporal_w15_cls_d4_fe4_jointonly_grasp
+  tags: ["brainco", "xyz", "grasp_prediction", "temporal_former", "w15", "cls",
+         "former_d4", "frame_d4", "42joint", "joint_only", "no_force"]
+
+task:
+  model_encoder:
+    frame_encoder:
+      input_streams: pos

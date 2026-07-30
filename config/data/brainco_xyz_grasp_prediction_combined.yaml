@@ -1,5 +1,5 @@
 train_dataloader:
-  batch_size: 128
+  batch_size: 256
   num_workers: 4
   shuffle: true
   drop_last: false
@@ -28,7 +28,7 @@ dataset:
     window_time: ${data.window_time}
     window_overlap: ${data.window_overlap}
     interpolating_freq: ${data.interpolating_freq}
-    subtract_baseline: true
+    subtract_baseline: false
     align_xyz_to_npz: true
     data_roots:
       - data_path: ${paths.data_root}/brainco/downstream/grasp_prediction_0611

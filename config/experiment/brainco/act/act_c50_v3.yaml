@@ -1,0 +1,66 @@
+# @package _global_
+# REJECTED — kept only to document a negative result. Measured worse than
+# act_c50_v2: best val ratio 0.954 (vs 0.920) and it degraded back to 1.004 by
+# epoch 40. Both regularizers backfired: qpos noise corrupts the strongest
+# predictor of near-future actions, and the random image shift breaks the
+# image/robot-pose alignment manipulation depends on. Use act_c50_v2.
+#
+# ACT, chunk 50 — v3 targets the generalization gap that survived v2.
+#
+# v2 result (274 episodes, 24M): val l1_infer 0.313 vs 0.340 hold-state
+# baseline (ratio 0.920, stable to epoch 40 — no degradation), BUT train l1 was
+# 0.041 against a 0.372 train baseline. An 8x train/val gap means the model
+# still memorizes training episodes rather than learning the task.
+#
+# Two memorization channels are closed here:
+#   - images: random shift (5%) on top of stronger colour jitter, so the exact
+#     training frame cannot be identified from pixels.
+#   - qpos: Gaussian noise, because the raw joint vector nearly uniquely
+#     identifies a frame within an episode and image augmentation cannot help.
+# Validation samples bypass both (set_eval_indices in train_act.py).
+#
+#   python train_act.py +experiment=brainco/act/act_c50_v3.yaml
+defaults:
+  - override /data: brainco_act
+  - override /task: brainco_act
+  - _self_
+
+experiment_name: act_c50_v3
+ckpt_path: ./
+resume_id: ~
+
+fold: 0
+num_folds: 5
+
+data:
+  chunk_size: 50
+  frame_stride: 2
+  augment: true
+  qpos_noise_std: 0.1
+  dataset:
+    config:
+      data_roots:
+        - ${paths.data_root}/brainco/downstream/grasp_detection
+        - ${paths.data_root}/brainco/downstream/grasp_prediction
+  train_dataloader:
+    batch_size: 32
+
+task:
+  model:
+    hidden_dim: 256
+    dim_feedforward: 1024
+    enc_layers: 4
+    dec_layers: 6
+    cvae_enc_layers: 4
+    dropout: 0.2
+  optim_cfg:
+    weight_decay: 1e-3
+
+trainer:
+  max_epochs: 40
+  validation_frequency: 2
+
+wandb:
+  project: brainco_act
+  group: act_c50_v3
+  tags: ["brainco", "act", "chunk50", "shift_aug", "qpos_noise"]

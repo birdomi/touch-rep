@@ -1,0 +1,51 @@
+# @package _global_
+
+# Temporal-crop DINOv2 on a jointly-trained frame encoder + temporal former.
+#
+# Independent of the frame-wise experiment tree: this config selects
+# algorithm/temporal_dinov2 directly rather than inheriting any
+# dinov2_pretraining_* file, so nothing here perturbs the running experiments.
+#
+# W = 15 frames (150ms at 100Hz). Global crops are 9-15 frames, local crops
+# 4-7, so the slip downstream (5-10 frames) sits inside the training
+# distribution. Grasp uses 30-frame windows, i.e. 2x extrapolation on the
+# former's frame-index RoPE -- acceptable to fine-tune through, and if it is
+# not, a short W=30 adaptation run is the fix rather than pretraining at 30.
+#
+# window_stride 5 gives roughly 510k windows per epoch.
+
+defaults:
+  - override /data: oakinkv2_arctic_taco_hot3d
+  - override /algorithm: temporal_dinov2
+  - _self_
+
+model_size: tiny
+ckpt_path: ./
+
+experiment_name: dinov2_temporal_all_pseudo_force_${model_size}_tip_w15
+
+wandb:
+  entity: ryk9012-gwangju-institute-of-science-and-technology
+  project: dinov2
+  group: dino_temporal_all_pseudo_force_${model_size}_tip_w15
+  tags: ["all", "pseudo_force", "${model_size}", "rope", "temporal_former",
+         "fingertip", "w15"]
+
+trainer:
+  max_epochs: 100
+  validation_frequency: 50
+
+data:
+  sensor: all_pseudo_force
+  oakinkv2_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/oakinkv2
+  arctic_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/arctic
+  taco_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/taco
+  hot3d_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/hot3d
+  fingertip_only: true
+  window_size: 15
+  window_stride: 5
+  train_dataloader:
+    # Raised 256 -> 2048 on 2026-07-29. Runs launched before that (including
+    # w15_prox_d2_cls and w15_prox_cls_d4_fe4) trained at 256, so their curves
+    # are not step-comparable with anything started afterwards.
+    batch_size: 2048

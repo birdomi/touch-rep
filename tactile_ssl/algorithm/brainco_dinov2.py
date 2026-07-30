@@ -198,8 +198,11 @@ class BraincoDINOv2Module(DINOv2Module):
         assert global_masks is not None and local_masks is not None, "Masks are required for DINOModule during training"
         pos = self._empty_pos_like(xs)
 
+        # Flatten before nonzero: on a 2-D mask nonzero returns (row, col)
+        # pairs, and flattening those interleaves row and column numbers into
+        # what is then used as a flat index into (b n).
         ibot_masks_flat = ibot_masks.flatten(0, 1)
-        ibot_mask_indices = torch.nonzero(ibot_masks_flat).flatten()
+        ibot_mask_indices = torch.nonzero(ibot_masks_flat.flatten()).flatten()
         num_ibot_tokens = len(ibot_mask_indices)
 
         # TODO: @Akash Sharma - Raise to make sure context encoder implements taking masks as an argument

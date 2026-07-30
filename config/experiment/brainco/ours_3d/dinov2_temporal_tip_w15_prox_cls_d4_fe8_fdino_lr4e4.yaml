@@ -1,0 +1,36 @@
+# @package _global_
+
+# Fingertip counterpart of dinov2_temporal_w15_prox_cls_d4_fe8_fdino_lr4e4: the
+# tip line (10 fingertip sensors, in_dim 10, data.fingertip_only) with the frame
+# encoder at depth 8 instead of 4.
+#
+# Direct comparison target is tip_lr4e4_ep500 -- identical in every other
+# respect, so any downstream difference is the frame encoder's depth alone.
+#
+# pre_fusion_depth stays 1, so depth 8 doubles the fusion blocks only.
+#
+# Downstream evals MUST set model_encoder.frame_encoder.depth: 8. (in_dim does
+# NOT need to be set to 10 downstream: under RoPE no parameter shape depends on
+# it and the RoPE branch is chosen from the runtime token count, so in_dim 42 and
+# 10 give bit-identical outputs on the same 10-sensor BrainCo input.)
+#
+# Inherited: proximity-only (in_chans 1), fingertip sensor stream, CLS-frames
+# former input, former depth 4, W=15, stride 5, batch 2048, lr 4e-4, 500 epochs,
+# frame-level DINO/iBOT at weight 1.0/1.0.
+
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_temporal_tip_w15_prox_cls_d4_fe4_fdino_lr4e4
+  - _self_
+
+experiment_name: dinov2_temporal_all_pseudo_force_${model_size}_tip_w15_prox_cls_d4_fe8_fdino_lr4e4
+
+wandb:
+  group: dino_temporal_all_pseudo_force_${model_size}_tip_w15_prox_cls_d4_fe8_fdino_lr4e4
+  tags: ["all", "pseudo_force", "${model_size}", "rope", "temporal_former",
+         "w15", "proximity_only", "fingertip", "cls_frames", "former_d4",
+         "frame_d8", "frame_dino", "lr4e-4"]
+
+algorithm:
+  encoder:
+    frame_encoder:
+      depth: 8

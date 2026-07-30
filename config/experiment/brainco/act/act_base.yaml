@@ -1,0 +1,29 @@
+# @package _global_
+# ACT on the BrainCo grasp_detection episodes (610-frame manipulation rollouts).
+#   python train_act.py +experiment=brainco/act/act_base.yaml
+defaults:
+  - override /data: brainco_act
+  - override /task: brainco_act
+  - _self_
+
+experiment_name: act_base_grasp_detection
+ckpt_path: ./
+resume_id: ~
+
+fold: 0
+num_folds: 5
+
+data:
+  chunk_size: 50
+  frame_stride: 1
+  train_dataloader:
+    batch_size: 32
+
+trainer:
+  max_epochs: 100
+  validation_frequency: 5
+
+wandb:
+  project: brainco_act
+  group: act_base
+  tags: ["brainco", "act", "resnet18", "tactile", "grasp_detection"]

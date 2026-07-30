@@ -1,0 +1,33 @@
+# @package _global_
+
+# Temporal-crop DINOv2, proximity-only, depth-2 former, on ALL 42 hand joints
+# (fingertip_only removed -- this is dinov2_temporal_tip_w15_prox_d2 with the
+# fingertip restriction dropped).
+#
+# The frame encoder emits 42 sensor + 10 pos = 52 tokens per frame, so the
+# former attends over a 15 x 52 grid (781 tokens with the register) instead of
+# 15 x 20. Downstream BrainCo still feeds 10 fingertip sensors; the frame
+# encoder's sparse-tactile RoPE branch maps them onto the same skeleton
+# coordinates, exactly as the frame-wise 42-joint runs did.
+#
+# Inherited unchanged: proximity-only input (in_chans 1), W=15, crop ranges,
+# batch 2048, stride 5, lr, 100 epochs, depth-2 former.
+
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_temporal_tip_w15_prox_d2
+  - _self_
+
+experiment_name: dinov2_temporal_all_pseudo_force_${model_size}_w15_prox_d2
+
+wandb:
+  group: dino_temporal_all_pseudo_force_${model_size}_w15_prox_d2
+  tags: ["all", "pseudo_force", "${model_size}", "rope", "temporal_former",
+         "w15", "proximity_only", "depth2", "42joint"]
+
+data:
+  fingertip_only: false
+
+algorithm:
+  encoder:
+    frame_encoder:
+      in_dim: 42

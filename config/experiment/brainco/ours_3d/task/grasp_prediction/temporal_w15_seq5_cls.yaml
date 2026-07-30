@@ -1,0 +1,18 @@
+# @package _global_
+
+# W=5 temporal encoder on 15-frame windows, CLS readout: the former emits one
+# DINO-trained CLS per 5-frame encoder window (3 per sample), MeanPoolProbe
+# averages the three and classifies.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/temporal_w15_seq5
+  - _self_
+
+experiment_name: brainco_xyz_grasp_prediction_temporal_w15_seq5_cls
+
+wandb:
+  group: temporal_w15_seq5_cls_grasp
+  tags: ["brainco", "xyz", "grasp_prediction", "temporal_former", "w15", "seq5", "cls"]
+
+task:
+  pooling: cls

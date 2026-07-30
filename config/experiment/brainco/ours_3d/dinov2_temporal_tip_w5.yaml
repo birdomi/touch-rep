@@ -1,0 +1,33 @@
+# @package _global_
+
+# dinov2_temporal_tip_w15 with a 5-frame (50ms) temporal window.
+#
+# Crop ranges scale down with the window -- [9,15]/[4,7] cannot fit in 5
+# frames -- so globals are 3-5 frames, locals 2-3, and each masked token
+# position loses 1-2 frames. Everything else (fingertip tokens, token set
+# "all", batch 2048, lr, 100 epochs) is inherited unchanged, so the pair with
+# the W=15 run isolates how much temporal context the former actually needs.
+#
+# window_stride stays 5, which keeps the epoch at roughly the same number of
+# windows as the W=15 run (~510k) rather than confounding window length with
+# dataset size.
+
+defaults:
+  - /experiment/brainco/ours_3d/dinov2_temporal_tip_w15
+  - _self_
+
+experiment_name: dinov2_temporal_all_pseudo_force_${model_size}_tip_w5
+
+wandb:
+  group: dino_temporal_all_pseudo_force_${model_size}_tip_w5
+  tags: ["all", "pseudo_force", "${model_size}", "rope", "temporal_former",
+         "fingertip", "w5"]
+
+data:
+  window_size: 5
+  window_stride: 5
+
+algorithm:
+  global_crop_frames: [3, 5]
+  local_crop_frames: [2, 3]
+  ibot_span_frames: [1, 2]

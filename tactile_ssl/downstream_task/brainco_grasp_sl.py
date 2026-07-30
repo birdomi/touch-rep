@@ -24,7 +24,12 @@ from tactile_ssl.model.layers import SinusoidalEmbed
 
 import matplotlib.pyplot as plt
 from PIL import Image
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, f1_score
+from sklearn.metrics import (
+    balanced_accuracy_score,
+    confusion_matrix,
+    ConfusionMatrixDisplay,
+    f1_score,
+)
 
 log = get_pylogger(__name__)
 
@@ -276,7 +281,11 @@ class BraincoGraspDetectionSLModule(SLModule):
         best_val_metric: str = "accuracy",
         val_average_epochs: Sequence[int] = (10, 20, 30, 40, 50),
         class_weights: Optional[Sequence[float]] = None,
+        pooling: str = "attentive",
+        sensor_channels: Optional[Sequence[int]] = None,
     ):
+        if pooling not in {"attentive", "cls"}:
+            raise ValueError(f"pooling must be 'attentive' or 'cls', got {pooling!r}")
         super().__init__(
             model_encoder=model_encoder,
             model_task=model_task,
@@ -297,9 +306,12 @@ class BraincoGraspDetectionSLModule(SLModule):
         self.encoder_warmup_fine_tune_sensor_epochs = int(encoder_warmup_fine_tune_sensor_epochs)
         self.encoder_warmup_fine_tune_sensor_shallow_blocks = encoder_warmup_fine_tune_sensor_shallow_blocks
         self.log_confusion_matrix_image = bool(log_confusion_matrix_image)
-        if best_val_metric not in {"accuracy", "f1"}:
+        if best_val_metric == "accuracy":
+            # Reporting switched to balanced accuracy; keep the old config value working.
+            best_val_metric = "balanced_accuracy"
+        if best_val_metric not in {"balanced_accuracy", "f1", "f1_macro"}:
             raise ValueError(
-                "best_val_metric must be either 'accuracy' or 'f1', "
+                "best_val_metric must be 'balanced_accuracy', 'f1', or 'f1_macro', "
                 f"got {best_val_metric!r}"
             )
         self.best_val_metric = best_val_metric
@@ -361,9 +373,17 @@ class BraincoGraspDetectionSLModule(SLModule):
         
         embed_dim = self.model_encoder.embed_dim
         num_heads = getattr(self.model_encoder, "num_heads", 12)
-        self.pooler = AttentivePooler(
-            embed_dim=embed_dim,
-            num_heads=num_heads,
+        # "cls" reads the encoder's own register/CLS token -- the summary the
+        # DINO objective actually trained -- instead of a learned readout.
+        self.pooling = pooling
+        # Optional input channel subset (e.g. [0, 1, 2] drops proximity);
+        # the encoder's in_chans must match its length.
+        self.sensor_channels = (
+            list(sensor_channels) if sensor_channels is not None else None
+        )
+        self.pooler = (
+            AttentivePooler(embed_dim=embed_dim, num_heads=num_heads)
+            if pooling == "attentive" else None
         )
         if isinstance(model_task, (BraincoGraspProbe, MeanPoolProbe)):
             self.classifier = model_task
@@ -440,10 +460,13 @@ class BraincoGraspDetectionSLModule(SLModule):
         with torch.enable_grad() if encoder_grad_enabled else torch.no_grad():
             out = self.model_encoder.forward_features(sensor_input, poses_input)
             x_tokens = out["x_tokens"]  # (B*num_windows, num_patches + 1, embed_dim)
-            
-        # Apply attentive pooler to convert multiple tokens per window into 1 token
-        pooled_tokens = self.pooler(x_tokens)  # (B*num_windows, 1, embed_dim)
-        
+
+        if self.pooling == "cls":
+            pooled_tokens = out["x_norm_regtokens"][:, 0]
+        else:
+            # Apply attentive pooler to convert multiple tokens per window into 1 token
+            pooled_tokens = self.pooler(x_tokens)  # (B*num_windows, 1, embed_dim)
+
         window_tokens = pooled_tokens.view(B, W, -1)  # (B, num_windows, embed_dim)
 
         # Apply mask: zero out padding windows
@@ -535,10 +558,18 @@ class BraincoGraspDetectionSLModule(SLModule):
         preds = torch.cat(self.val_preds, dim=0).cpu().numpy()
         labels = torch.cat(self.val_labels, dim=0).cpu().numpy()
 
-        accuracy = (preds == labels).sum() / len(preds)
+        # Balanced accuracy (mean per-class recall) replaces raw accuracy: with
+        # an imbalanced split, raw accuracy cannot be told apart from a
+        # majority-class predictor.
+        balanced_accuracy = float(balanced_accuracy_score(labels, preds))
         class_labels = list(range(self.num_classes))
         f1_average = "binary" if self.num_classes == 2 else "macro"
         f1 = f1_score(labels, preds, average=f1_average, zero_division=0)
+        # Macro F1 weights both classes equally, so minority-class collapse
+        # shows up here even when the positive-class binary F1 does not.
+        f1_macro = float(
+            f1_score(labels, preds, labels=class_labels, average="macro", zero_division=0)
+        )
 
         # Confusion matrix
         cm = confusion_matrix(labels, preds, labels=class_labels)
@@ -547,15 +578,21 @@ class BraincoGraspDetectionSLModule(SLModule):
         if self._in_test:
             log.info("="*40)
             log.info(f"Test Results (best val weights):")
-            log.info(f"Accuracy: {accuracy:.4f}")
+            log.info(f"Balanced Accuracy: {balanced_accuracy:.4f}")
             log.info(f"F1 Score: {f1:.4f}")
+            log.info(f"F1 Macro: {f1_macro:.4f}")
             log.info(f"Confusion Matrix:\n{cm}")
             log.info("="*40)
-            self.last_test_metrics = {"accuracy": float(accuracy), "f1": float(f1)}
+            self.last_test_metrics = {
+                "balanced_accuracy": balanced_accuracy,
+                "f1": float(f1),
+                "f1_macro": f1_macro,
+            }
             if trainer_instance is not None:
                 trainer_instance.wandb.log({
-                    "test/overall_accuracy": accuracy,
+                    "test/balanced_accuracy": balanced_accuracy,
                     "test/f1_score": f1,
+                    "test/f1_macro": f1_macro,
                 })
             self.val_preds = []
             self.val_labels = []
@@ -563,8 +600,9 @@ class BraincoGraspDetectionSLModule(SLModule):
 
         log.info("="*40)
         log.info(f"Validation Results:")
-        log.info(f"Accuracy: {accuracy:.4f}")
+        log.info(f"Balanced Accuracy: {balanced_accuracy:.4f}")
         log.info(f"F1 Score: {f1:.4f}")
+        log.info(f"F1 Macro: {f1_macro:.4f}")
         log.info(f"Confusion Matrix (Normalized):\n{cm}")
         log.info("="*40)
 
@@ -587,7 +625,11 @@ class BraincoGraspDetectionSLModule(SLModule):
             plt.close("all")
             confusion_matrix_image = Image.open(img_buf)
 
-        self.last_val_metrics = {"accuracy": float(accuracy), "f1": float(f1)}
+        self.last_val_metrics = {
+            "balanced_accuracy": balanced_accuracy,
+            "f1": float(f1),
+            "f1_macro": f1_macro,
+        }
         if trainer_instance is not None:
             epoch = int(trainer_instance.current_epoch)
             self.val_metrics_by_epoch[epoch] = dict(self.last_val_metrics)
@@ -598,19 +640,27 @@ class BraincoGraspDetectionSLModule(SLModule):
             )
             if tuple(average_epochs) == self.val_average_epochs:
                 self.epoch_avg_val_metrics = {
-                    "accuracy": float(np.mean([
-                        self.val_metrics_by_epoch[recorded_epoch]["accuracy"]
+                    "balanced_accuracy": float(np.mean([
+                        self.val_metrics_by_epoch[recorded_epoch]["balanced_accuracy"]
                         for recorded_epoch in average_epochs
                     ])),
                     "f1": float(np.mean([
                         self.val_metrics_by_epoch[recorded_epoch]["f1"]
                         for recorded_epoch in average_epochs
                     ])),
+                    "f1_macro": float(np.mean([
+                        self.val_metrics_by_epoch[recorded_epoch]["f1_macro"]
+                        for recorded_epoch in average_epochs
+                    ])),
                     "epochs": average_epochs,
                 }
         selected_metric = self.last_val_metrics[self.best_val_metric]
         if selected_metric > self.best_val_metrics.get(self.best_val_metric, -1.0):
-            self.best_val_metrics = {"accuracy": float(accuracy), "f1": float(f1)}
+            self.best_val_metrics = {
+                "balanced_accuracy": balanced_accuracy,
+                "f1": float(f1),
+                "f1_macro": f1_macro,
+            }
             import copy
             self._best_state_dict = copy.deepcopy(
                 {k: v.cpu() for k, v in self.state_dict().items()}
@@ -622,8 +672,9 @@ class BraincoGraspDetectionSLModule(SLModule):
 
         if trainer_instance is not None:
             val_log = {
-                "val/overall_accuracy": accuracy,
+                "val/balanced_accuracy": balanced_accuracy,
                 "val/f1_score": f1,
+                "val/f1_macro": f1_macro,
                 "epoch": trainer_instance.current_epoch,
             }
             if confusion_matrix_image is not None:
@@ -657,7 +708,7 @@ class BraincoGraspDetectionSLModule(SLModule):
         self.val_failed_samples = []
 
     def evaluate_test(self, test_loader, trainer_instance):
-        """Restore best-val weights and evaluate on test_loader. Returns {accuracy, f1}."""
+        """Restore best-val weights and evaluate on test_loader. Returns {balanced_accuracy, f1}."""
         if self._best_state_dict is not None:
             self.load_state_dict(self._best_state_dict)
             log.info("Restored best-val weights for test evaluation.")

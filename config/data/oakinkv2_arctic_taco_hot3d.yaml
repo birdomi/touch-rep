@@ -27,3 +27,9 @@ hot3d_data_root: pretraining_dataset/vector_dataset/HOT3D/hot3d
 window_size: 1
 window_stride: 1
 train_val_split: 1.0
+# Restrict the sensor stream to the 10 fingertip joints (FINGERTIP_COLUMNS),
+# matching the BrainCo downstream sensor layout, instead of all 42 joints.
+fingertip_only: false
+# Subset of FORCE_CHANNELS names to keep as input channels (null = all four).
+# e.g. ["proximity"] trains on proximity alone; encoder.in_chans must match.
+sensor_channels: null
