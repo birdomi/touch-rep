@@ -1,0 +1,87 @@
+# BrainCo teleop SSL pretraining for the temporal former.
+#
+# Source: dataset/brainco/pretraining -- 6 objects x 2 episodes, 79,751 frames
+# recorded at 30 Hz (the older pretraining_dataset/brainco dump was 60 Hz, so a
+# window of N frames here spans twice as much real time).
+#
+# BraincoSSLDataset emits exactly the two streams the temporal former consumes:
+#   sensor       (W, 10, 4)  [Fn, Ft*cos(theta), Ft*sin(theta), proximity]
+#                            via force_direction_to_cartesian -- the sensor's
+#                            tangential magnitude + direction pair becomes the
+#                            same Cartesian channels the HOI pseudo-force data
+#                            is stored in, so FORCE_CHANNELS line up 1:1.
+#   sensor_poses (W, 10, 3)  fingertip XYZ in the wrist frame, from URDF FK.
+#                            |xyz| ~ 0.12 m against HOI finger_xyz ~ 0.13 m.
+# The experiment config points sensor_input_key / pos_input_key at these names.
+
+train_dataloader:
+  batch_size: 2048
+  num_workers: 8
+  shuffle: true
+  drop_last: true
+  pin_memory: true
+  persistent_workers: true
+
+val_dataloader:  # unused: val_dataset_ids is empty, every episode trains
+  batch_size: 128
+  num_workers: 4
+  shuffle: false
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+normalization:
+  # Populated at runtime by get_dataloaders_brainco_based() from this dataset,
+  # then stamped onto the encoder by _maybe_update_encoder_stats(). When a run
+  # starts from a pretrained checkpoint, this overwrites the stats that came
+  # with it -- same order as SLModule.load_encoder + update_stats downstream.
+  mean: null
+  std: null
+
+sensor: brainco
+object_classes: null
+object_class_weights: null
+
+# BraincoSSLDataset does not resample: interpolating_freq only sets the window
+# length as window_time * interpolating_freq = 15 frames (= 0.5 s at 30 Hz),
+# and window_overlap sets the hop as round(15 * (1 - 0.6667)) = 5 frames.
+# Equivalent to the HOI configs' window_size: 15 / window_stride: 5.
+window_time: 0.15
+interpolating_freq: 100
+window_overlap: 0.6667
+
+# The dataset's fixed max_values divisor ([1000, 1000, 1000, 100000]) leaves
+# this recording's proximity up to ~135 while the force channels stay under 3.
+# Standardize on the train episodes instead so every channel reaches the encoder
+# in the range the HOI-pretrained sensor_embed was fitted on.
+standardize_channels: true
+
+dataset_list:
+  - type: teleop
+    sequence_list:
+      - bottle
+      - bubble wrap
+      - driver
+      - pot
+      - sponge
+      - towel
+    # Every episode trains -- no held-out split, so all 15,921 windows of the
+    # 79,751 recorded frames contribute gradient. val_dataset_ids is empty and
+    # train.py returns no val dataloader, which Trainer.val_loop no-ops on: the
+    # run reports train losses only.
+    #
+    # Each object has episode_0000 and episode_0001 except towel, which has 0001
+    # and 0002. Listing 0-2 covers all twelve; the five "episode_0002 not found"
+    # warnings in the log are expected.
+    train_dataset_ids: [0, 1, 2]
+    val_dataset_ids: []
+
+    dataset:
+      _target_: tactile_ssl.data.brainco_tactile.BraincoSSLDataset
+      config:
+        window_time: ${data.window_time}
+        window_overlap: ${data.window_overlap}
+        interpolating_freq: ${data.interpolating_freq}
+      data_path: ${paths.data_root}/brainco/pretraining
+      brainco_urdf_path: ${paths.data_root}/brainco/urdf/
+      load_images: false

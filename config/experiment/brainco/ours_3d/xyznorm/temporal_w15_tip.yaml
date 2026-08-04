@@ -1,0 +1,41 @@
+# @package _global_
+#
+# temporal_w15_tip_lr4e4 with the fingertip position stream converted to BrainCo's wrist
+# frame and z-scored, at 200 epochs instead of 500.
+#
+# HOI and BrainCo fingertip frames are a cyclic axis permutation apart -- HOI's
+# long finger axis is y, BrainCo's is z -- so a pos embedding trained on one
+# lands in a rotated geometry on the other. align_xyz_to_brainco converts HOI
+# into BrainCo's convention (the inverse of the _align_xyz_to_npz the downstream
+# BrainCo datasets used to apply), which lets BrainCo keep its raw FK output in
+# pretraining, downstream and inference alike.
+#
+# standardize_pos is OFF. Alignment alone is the intervention here.
+#
+# Measured with it on (HOI tip 200 ep, seed 0, epoch-controlled against the same
+# checkpoint under the original pipeline):
+#     grasp  0.9342 -> 0.9194   slip  0.7671 -> 0.7412
+# and it erased the benefit of pretraining entirely -- the no-pretraining arm
+# scored 0.9214 grasp / 0.7415 slip, indistinguishable from the pretrained one.
+# Per-axis whitening also flattens the ~1.8x palm-normal scale gap between a
+# human hand (HOI) and the robot hand (BrainCo), which is real signal, not noise.
+#
+# RoPE is unaffected: _rope_positions builds coordinates from finger indices.
+#
+# Baseline for comparison: the epoch-0200 snapshot of the original temporal_w15_tip_lr4e4 run.
+
+defaults:
+  - /experiment/brainco/ours_3d/temporal_w15_tip_lr4e4
+  - _self_
+
+data:
+  align_xyz_to_brainco: true
+  standardize_pos: false
+
+trainer:
+  max_epochs: 200
+
+experiment_name: xyznorm_temporal_w15_tip
+hydra:
+  run:
+    dir: ${paths.log_dir}/${now:%Y.%m.%d}/${experiment_name}

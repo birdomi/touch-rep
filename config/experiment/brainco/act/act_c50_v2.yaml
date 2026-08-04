@@ -1,4 +1,14 @@
 # @package _global_
+# RECOMMENDED ACT configuration for BrainCo (best of five runs, 2026-07-30).
+#
+# Measured, fold 0, chunk 50, 40 epochs:
+#   val  l1_infer 0.329  vs  0.354 hold-state baseline  -> ratio 0.928
+#   train l1      0.074  vs  0.373                      -> ratio 0.199
+#   stable from epoch 16 to 40, no late-epoch degradation.
+# Rejected alternatives: 84M model (0.930), stronger colour jitter + random
+# shift (0.929), + qpos noise and dropout 0.2 (0.954, see act_c50_v3.yaml).
+# The remaining train/val gap (~4.4x) is a data limit, not a tuning limit.
+#
 # ACT, chunk 50, tuned against the overfitting seen in act_base:
 #   act_base (51 episodes, 84M params) reached train l1 0.14 but val l1_infer
 #   bottomed at 0.345 vs a 0.344 hold-state baseline — it never generalized.

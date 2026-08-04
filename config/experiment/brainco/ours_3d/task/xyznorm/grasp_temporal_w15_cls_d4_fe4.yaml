@@ -1,0 +1,42 @@
+# @package _global_
+#
+# grasp_prediction under the BrainCo-frame xyz pipeline.
+#
+# Two deltas against temporal_w15_cls_d4_fe4:
+#
+#   align_xyz_to_npz: false   BrainCo is the reference frame now. HOI is what
+#                             converts (pseudo_force_tactile.align_xyz_to_brainco_frame),
+#                             so BrainCo must stop converting to NPZ order or it
+#                             would land in a rotated geometry against encoders
+#                             pretrained by config/experiment/brainco/ours_3d/xyznorm/*.
+#   standardize_pos: false    Left off deliberately; see the note below.
+#
+# Only for xyznorm/* checkpoints. Evaluating an older checkpoint with this config
+# (or an xyznorm checkpoint with the original config) mismatches the pos frame.
+
+# standardize_pos is OFF. Alignment alone is the intervention here.
+#
+# Measured with it on (HOI tip 200 ep, seed 0, epoch-controlled against the same
+# checkpoint under the original pipeline):
+#     grasp  0.9342 -> 0.9194   slip  0.7671 -> 0.7412
+# and it erased the benefit of pretraining entirely -- the no-pretraining arm
+# scored 0.9214 grasp / 0.7415 slip, indistinguishable from the pretrained one.
+# Per-axis whitening also flattens the ~1.8x palm-normal scale gap between a
+# human hand (HOI) and the robot hand (BrainCo), which is real signal, not noise.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/temporal_w15_cls_d4_fe4
+  - _self_
+
+experiment_name: xyznorm_grasp_temporal_w15_cls_d4_fe4
+
+wandb:
+  group: xyznorm_grasp
+  tags: ["brainco", "xyz", "grasp_prediction", "temporal_former", "w15", "cls",
+         "former_d4", "frame_d4", "xyznorm"]
+
+data:
+  standardize_pos: false
+  dataset:
+    config:
+      align_xyz_to_npz: false

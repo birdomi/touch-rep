@@ -34,6 +34,12 @@ model_size: base
 model_embed_dim: ${model_info.${model_size}.embed_dim}
 resume_id: ~
 ckpt_path: ~
+# Path to a .ckpt whose weights seed this run. Parameters only -- no optimizer,
+# scheduler or epoch counter, unlike ckpt_path. Ignored when resuming.
+init_from_ckpt: ~
+# Substrings of state_dict keys to leave randomly initialised when
+# init_from_ckpt loads, e.g. ["sensor_embed."] to relearn the input projection.
+init_skip_keys: ~
 experiment_name: default_${model_size}
 
 trainer:
@@ -41,6 +47,9 @@ trainer:
   grad_clip_norm: 10.0
   validation_frequency: 10
   checkpoint_frequency: 10
+  # Epochs between last.ckpt rewrites. 1 is the original behaviour; raise it when
+  # an epoch is only a couple of optimizer steps, or the 262 MB write dominates.
+  latest_checkpoint_frequency: 1
   log_frequency: 500
   save_checkpoint_dir: ${paths.output_dir}/checkpoints
 

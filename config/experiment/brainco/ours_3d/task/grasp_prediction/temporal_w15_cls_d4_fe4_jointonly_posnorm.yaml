@@ -1,0 +1,39 @@
+# @package _global_
+
+# The joint-only grasp setup with the pose stream standardised.
+#
+# Why: finger_xyz is wrist-local fingertip position in metres, fed raw. Measured
+# over the grasp windows the per-channel std is [0.0345, 0.0248, 0.0094] -- the
+# weakest channel varies by under a centimetre. A randomly initialised encoder
+# gets almost no per-sample variation from that and never leaves the ln(2)
+# plateau: with input std 1.0 the same model overfits 64 samples to accuracy 1.0
+# in 400 steps, and at the real scale it stays at loss 0.6931 with accuracy 0.64.
+# That, not the learning rate or the batch size, is why jointonly_scratch scored
+# exactly 0.5000 at batch 256/128 and at lr 1e-4/1e-3.
+#
+# The force stream never had this problem because it is standardised by the
+# signal_mean/signal_std buffers, which is why the force scratch arm trains fine.
+#
+# Statistics are per-channel over the whole grasp window set (1180 windows), not
+# per fold; with 4-fold CV the train split covers 3/4 of that, so the leakage is
+# limited to input scaling and does not touch labels.
+#
+# IMPORTANT: use this only for arms trained under the same setting. Checkpoints
+# pretrained before this existed learned on raw-scale pose, so loading one here
+# feeds it a distribution it never saw.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/temporal_w15_cls_d4_fe4_jointonly
+  - _self_
+
+experiment_name: brainco_xyz_grasp_prediction_temporal_w15_cls_d4_fe4_jointonly_posnorm
+
+wandb:
+  group: temporal_w15_cls_d4_fe4_jointonly_posnorm_grasp
+  tags: ["brainco", "xyz", "grasp_prediction", "temporal_former", "w15", "cls",
+         "former_d4", "frame_d4", "42joint", "joint_only", "no_force", "posnorm"]
+
+task:
+  pos_normalization:
+    mean: [0.000384, 0.116972, 0.029616]
+    std: [0.034511, 0.024843, 0.009360]

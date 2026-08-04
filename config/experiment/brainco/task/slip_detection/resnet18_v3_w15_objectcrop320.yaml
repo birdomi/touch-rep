@@ -1,0 +1,26 @@
+# @package _global_
+#
+# Wider variant of resnet18_v3_w15_objectcrop: a 320x320 box around the grasp
+# region, downscaled to 224 for the ResNet.
+#
+# The tight 224 box ([208, 24, 224, 224]) drops one of the two fingertips
+# whenever the arms drift, and clips wide objects. 320 keeps the whole object
+# and both fingertips in every v3 class at the cost of a little more room
+# showing at the top corners; the resize to img_size happens in the dataset's
+# normal path, so the network still sees 224x224.
+defaults:
+  - /experiment/brainco/task/slip_detection/resnet18_v3_w15
+  - _self_
+
+experiment_name: slip_detection_v3_w15_objectcrop320_resnet18
+
+wandb:
+  group: vision_resnet18_v3_w15_objectcrop320
+  tags: ["brainco", "vision", "resnet18", "slip_detection", "slip_data_v3",
+         "w15", "objectcrop", "crop320"]
+
+data:
+  crop_mode: box
+  dataset:
+    config:
+      crop_box: [160, 0, 320, 320]   # left, top, width, height

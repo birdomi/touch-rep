@@ -1,0 +1,110 @@
+# @package _global_
+#
+# BrainCo teleop pretraining, temporal former, 15-frame windows, FROM SCRATCH.
+#
+# "scratch" is the *initialisation* of this pretraining run, not an absence of
+# pretraining: the encoder this produces has had 1000 epochs of BrainCo SSL.
+# Call it brainco-only SSL when reporting, against hoi-init SSL for the twin.
+# The arm with no BrainCo SSL at all is the HOI checkpoint used directly.
+#
+# The control arm of the HOI-transfer pair. Its twin
+# brainco_temporal_w15_hoi_init.yaml is byte-identical except for the added
+# init_from_ckpt / init_skip_keys, so any difference between the two runs is
+# attributable to initialisation alone.
+#
+# Force input, per the sensor's own representation: the tangential magnitude and
+# direction pair (channels 1 and 2) is turned into Ft*cos(theta) / Ft*sin(theta)
+# by force_direction_to_cartesian inside BraincoSSLDataset, giving the encoder
+# FORCE_CHANNELS = [normal_force, tangential_force_x, tangential_force_y,
+# proximity]. That is the same 4-channel layout the HOI pseudo-force data uses,
+# which is what makes the checkpoint in the twin config loadable at all.
+#
+# Architecture and hyperparameters follow temporal_w15_tip_lr4e4.yaml, the HOI
+# run the twin initialises from: 10 fingertip sensors, frame encoder depth 4,
+# frame_token_set: cls, former depth 4, lr 4e-4, frame-level DINO/iBOT branch on.
+# The one departure is in_chans 4 instead of 1, because BrainCo carries the
+# cos/sin force channels the HOI run left out.
+#
+# Evaluate with task/{grasp_prediction,slip_detection}/temporal_w15_cls_d4_fe4
+# (plus _v3 for slip), passing task.checkpoint_encoder. Those configs say
+# frame_encoder.in_dim: 42 against this run's 10, which does not matter: under
+# pos_embed_fn: rope the in_dim-sized contact_pos_embed is None, so no parameter
+# depends on in_dim and both settings produce an identical 77-tensor state_dict.
+# frame_token_set and frame_encoder.depth are the settings that must match, and
+# they do -- task/*/temporal_w15.yaml would not (all / depth 8).
+#
+# Self-contained: no parent experiment config.
+
+defaults:
+  - override /data: brainco_temporal_pretraining
+  - override /algorithm: temporal_dinov2
+  - _self_
+
+wandb:
+  project: dinov2
+  tags:
+  - brainco
+  - teleop
+  - ${model_size}
+  - rope
+  - temporal_former
+  - w15
+  - force_cossin
+  - fingertip
+  - cls_frames
+  - frame_d4
+  - frame_dino
+  - lr4e-4
+  - scratch
+  group: dino_temporal_brainco_${model_size}_w15_force_cossin
+
+data:
+  train_dataloader:
+    batch_size: 2048
+
+algorithm:
+  # BraincoSSLDataset names its two streams "sensor" / "sensor_poses" where the
+  # HOI dataset says "joint_force" / "finger_xyz". Same tensors, same channel
+  # order, same units.
+  sensor_input_key: sensor
+  pos_input_key: sensor_poses
+  encoder:
+    frame_token_set: cls
+    frame_encoder:
+      in_dim: 10        # 10 fingertip sensors, left 0-4 then right 5-9
+      in_chans: 4       # [Fn, Ft*cos, Ft*sin, proximity]
+      pos_in_dim: 10
+      pos_in_chans: 3   # fingertip XYZ
+      depth: 4
+  optim_cfg:
+    lr: 0.0004
+  # frame_dino_head is not present in the HOI checkpoint, so it starts fresh in
+  # both arms of the pair -- the comparison stays fair.
+  frame_dino_loss_weight: 1.0
+  frame_ibot_loss_weight: 1.0
+  frame_dino_frames: 2
+  frame_dino_num_local_masks: 4
+  frame_dino_global_mask_scale:
+  - 0.6
+  - 1.0
+  frame_dino_local_mask_scale:
+  - 0.3
+  - 0.6
+  frame_dino_ibot_mask_ratio:
+  - 0.3
+  - 0.7
+
+model_size: tiny
+ckpt_path: ./
+experiment_name: dinov2_temporal_brainco_${model_size}_w15_force_cossin_scratch
+
+# Batch 2048 matches the HOI runs, so lr 4e-4 means the same thing on both
+# sides. 15,921 train windows / 2048 = 7 steps per epoch, hence the large epoch
+# budget. No validation split, so validation_frequency has nothing to run.
+#
+# The first-round numbers in
+# scripts/results_brainco_teleop_pretraining_20260730_222500.md were produced at
+# batch 256 (62 steps/epoch), before this change.
+trainer:
+  max_epochs: 1000
+  checkpoint_frequency: 50

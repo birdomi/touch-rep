@@ -1,0 +1,27 @@
+# @package _global_
+#
+# grasp_prediction for the frame-wise (window-1) encoders, under the
+# BrainCo-frame xyz pipeline.
+#
+# frame_w1_* pretrains a plain angle_tiny with sequence_length 1 -- no temporal
+# former -- so it needs the frame-wise task stack, not task/xyznorm/grasp_*.
+# The only deltas against dinov2_all_rope_w15 are the pipeline ones:
+# align_xyz_to_npz: false (BrainCo is the reference frame now) and
+# standardize_pos: false (per-axis whitening measured worse; see the note in
+# config/experiment/brainco/ours_3d/xyznorm/*).
+
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/dinov2_all_rope_w15
+  - _self_
+
+experiment_name: xyznorm_grasp_framew1
+
+wandb:
+  group: xyznorm_grasp_framew1
+  tags: ["brainco", "xyz", "grasp_prediction", "frame_w1", "xyznorm"]
+
+data:
+  standardize_pos: false
+  dataset:
+    config:
+      align_xyz_to_npz: false

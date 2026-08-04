@@ -1,0 +1,30 @@
+# @package _global_
+
+# temporal_w15_cls_d4_fe4 with the frame encoder at depth 8, matching the
+# dinov2_temporal_*_cls_d4_fe8_* pretraining line.
+#
+# depth MUST match the checkpoint. load_encoder filters by name and shape and
+# then loads with strict=False, so against a depth-4 downstream a depth-8
+# checkpoint would quietly contribute only its first 4 fusion blocks and the
+# rest would stay random -- no error, just a worse model.
+#
+# Everything else is inherited: former depth 4, CLS-frames former input, CLS
+# readout, 42-joint pose layout, 15-frame window. in_dim stays 42 and is correct
+# for fingertip checkpoints too: under RoPE no parameter shape depends on it and
+# the RoPE branch is chosen from the runtime token count.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/temporal_w15_cls_d4_fe4
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_temporal_w15_cls_d4_fe8
+
+wandb:
+  group: temporal_w15_cls_d4_fe8_slip
+  tags: ["brainco", "xyz", "slip_detection", "temporal_former", "w15", "cls",
+         "former_d4", "frame_d8"]
+
+task:
+  model_encoder:
+    frame_encoder:
+      depth: 8

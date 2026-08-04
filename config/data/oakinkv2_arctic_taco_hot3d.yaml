@@ -33,3 +33,11 @@ fingertip_only: false
 # Subset of FORCE_CHANNELS names to keep as input channels (null = all four).
 # e.g. ["proximity"] trains on proximity alone; encoder.in_chans must match.
 sensor_channels: null
+
+# Data-scaling study: keep this fraction of the *training* files, per corpus, so
+# the domain mix is preserved. The order is shuffled once with data_fraction_seed
+# and sliced from the front, so subsets nest (1% inside 2% inside 5% ...) and the
+# curve measures added data rather than a different draw at every point.
+# null = use everything.
+data_fraction: null
+data_fraction_seed: 1234

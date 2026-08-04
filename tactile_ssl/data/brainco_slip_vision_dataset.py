@@ -58,10 +58,23 @@ class BraincoSlipVisionDataset(data.Dataset):
         self.augment = bool(augment)
         self.crop_mode = str(config.get("crop_mode", "resize"))
         self.crop_size = int(config.get("crop_size", self.img_size))
-        if self.crop_mode not in {"resize", "bottom_center"}:
+        if self.crop_mode not in {"resize", "bottom_center", "box"}:
             raise ValueError(
-                f"crop_mode must be 'resize' or 'bottom_center', got {self.crop_mode!r}"
+                "crop_mode must be 'resize', 'bottom_center' or 'box', "
+                f"got {self.crop_mode!r}"
             )
+        # "box" keeps a fixed [left, top, width, height] region of the raw frame
+        # — used to cut the room away and leave only the grasped object and the
+        # fingertips, so the classifier cannot key on scene context.
+        crop_box = config.get("crop_box")
+        self.crop_box = [int(v) for v in crop_box] if crop_box is not None else None
+        if self.crop_mode == "box":
+            if self.crop_box is None or len(self.crop_box) != 4:
+                raise ValueError(
+                    "crop_mode='box' needs crop_box=[left, top, width, height]"
+                )
+            if min(self.crop_box[2], self.crop_box[3]) <= 0:
+                raise ValueError("crop_box width and height must be positive")
         # Random-crop slack used only when augmenting, in pixels of the resized image.
         self.augment_pad = int(config.get("augment_pad", 16))
         self.augment_jitter = float(config.get("augment_jitter", 0.2))
@@ -91,6 +104,33 @@ class BraincoSlipVisionDataset(data.Dataset):
             raise ValueError("Slip transition exclusion margins must be >= 0")
 
         self.input_window_frames = input_window_frames
+        # Explicit 1-indexed frame picks inside the window (e.g. [1, 5, 15] reads
+        # the 1st, 5th and 15th frame of a 15-frame window). When unset, frames
+        # are spaced evenly across the window.
+        frame_positions = config.get("frame_positions")
+        self.frame_positions = (
+            [int(position) for position in frame_positions]
+            if frame_positions is not None else None
+        )
+        if self.frame_positions is not None:
+            if not self.frame_positions:
+                raise ValueError("frame_positions must not be empty")
+            for position in self.frame_positions:
+                if not 1 <= position <= input_window_frames:
+                    raise ValueError(
+                        f"frame_positions entries must be within [1, {input_window_frames}], "
+                        f"got {position}"
+                    )
+            if (
+                num_frames_per_sample is not None
+                and int(num_frames_per_sample) != len(self.frame_positions)
+            ):
+                raise ValueError(
+                    "num_frames_per_sample must match len(frame_positions): "
+                    f"{num_frames_per_sample} vs {len(self.frame_positions)}"
+                )
+            num_frames_per_sample = len(self.frame_positions)
+
         self.num_frames_per_sample = int(
             num_frames_per_sample
             if num_frames_per_sample is not None
@@ -214,7 +254,9 @@ class BraincoSlipVisionDataset(data.Dataset):
         return paths
 
     def _sample_frame_indices(self, frame_indices: np.ndarray) -> np.ndarray:
-        """Pick ``num_frames_per_sample`` frames evenly across the window."""
+        """Pick the configured frames out of the window."""
+        if self.frame_positions is not None:
+            return frame_indices[[position - 1 for position in self.frame_positions]]
         if self.num_frames_per_sample == len(frame_indices):
             return frame_indices
         positions = np.linspace(
@@ -257,6 +299,9 @@ class BraincoSlipVisionDataset(data.Dataset):
         img = Image.open(str(path)).convert("RGB")
         if self.crop_mode == "bottom_center":
             img = self._bottom_center_crop(img)
+        elif self.crop_mode == "box":
+            left, top, width, height = self.crop_box
+            img = TF.crop(img, top, left, height, width)
 
         if params is None:
             img = TF.resize(img, [self.img_size, self.img_size])

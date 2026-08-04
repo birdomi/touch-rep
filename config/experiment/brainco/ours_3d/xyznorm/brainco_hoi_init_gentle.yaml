@@ -1,0 +1,53 @@
+# @package _global_
+#
+# brainco_temporal_w15_hoi_init_gentle at 200 epochs with the position stream z-scored.
+#
+# BrainCo needs no axis conversion -- it is the reference frame now, and HOI is
+# what moves (xyznorm/temporal_w15_tip). So sensor_poses stays the raw FK output
+# and no axis conversion applies.
+#
+# standardize_pos is OFF. Alignment alone is the intervention here.
+#
+# Measured with it on (HOI tip 200 ep, seed 0, epoch-controlled against the same
+# checkpoint under the original pipeline):
+#     grasp  0.9342 -> 0.9194   slip  0.7671 -> 0.7412
+# and it erased the benefit of pretraining entirely -- the no-pretraining arm
+# scored 0.9214 grasp / 0.7415 slip, indistinguishable from the pretrained one.
+# Per-axis whitening also flattens the ~1.8x palm-normal scale gap between a
+# human hand (HOI) and the robot hand (BrainCo), which is real signal, not noise.
+#
+# lr 2.5e-6, warmup 0.
+
+defaults:
+  - /experiment/brainco/ours_3d/brainco_temporal_w15_hoi_init_gentle
+  - _self_
+
+data:
+  standardize_pos: false
+  # Batch 512 with lr 2.5e-6 keeps the same per-sample rate as the HOI runs
+  # (2048, 4e-4) scaled linearly, while leaving 15,921 / 512 = 31 steps per
+  # epoch. Batch 2048 was tried first and starved on steps -- 7 per epoch, and
+  # at 850 epochs train_loss was still 11.98 where batch 256 reached 7.53 in
+  # 200 epochs.
+  train_dataloader:
+    batch_size: 512
+
+algorithm:
+  optim_cfg:
+    lr: 2.5e-6
+  lr_scheduler_cfg:
+    warmup_epochs: 0
+
+trainer:
+  max_epochs: 200
+  checkpoint_frequency: 20
+
+experiment_name: xyznorm_brainco_hoi_init_gentle
+hydra:
+  run:
+    dir: ${paths.log_dir}/${now:%Y.%m.%d}/${experiment_name}
+
+# Seeded from the xyz-aligned HOI tip run, sensor_embed still random.
+init_from_ckpt: ./experiments/2026.07.31/xyznorm_temporal_w15_tip/checkpoints/epoch-0200.ckpt
+init_skip_keys:
+- sensor_embed.

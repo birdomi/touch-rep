@@ -1,0 +1,75 @@
+# @package _global_
+
+# Temporal former, 15-frame windows, all 42 skeleton joints, lr 4e-4.
+#
+# The reference arm: identical to temporal_w15_tip_lr4e4 except the sensor
+# stream spans the full 42-joint skeleton instead of the 10 fingertips. BrainCo
+# feeds its 10 sensors onto this layout through the sparse-tactile RoPE branch.
+#
+# Result at 100 epochs: grasp 0.9253, slip 0.6843 (BalAcc, 2 seeds).
+#
+# Self-contained: no parent experiment config. Composed output is identical
+# to the pre-flattening chain (verified key by key).
+
+defaults:
+  - override /data: oakinkv2_arctic_taco_hot3d
+  - override /algorithm: temporal_dinov2
+  - _self_
+
+wandb:
+  project: dinov2
+  tags:
+  - all
+  - pseudo_force
+  - ${model_size}
+  - rope
+  - temporal_former
+  - w15
+  - proximity_only
+  - 42joint
+  - cls_frames
+  - former_d4
+  - frame_d4
+  - frame_dino
+  - lr4e-4
+  group: dino_temporal_all_pseudo_force_${model_size}_w15_prox_cls_d4_fe4_fdino_lr4e4
+data:
+  train_dataloader:
+    batch_size: 2048
+  sensor: all_pseudo_force
+  oakinkv2_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/oakinkv2
+  arctic_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/arctic
+  taco_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/taco
+  hot3d_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/hot3d
+  window_size: 15
+  window_stride: 5
+  sensor_channels:
+  - proximity
+algorithm:
+  encoder:
+    frame_token_set: cls
+    frame_encoder:
+      in_dim: 42
+      in_chans: 1
+      depth: 4
+  optim_cfg:
+    lr: 0.0004
+  frame_dino_loss_weight: 1.0
+  frame_ibot_loss_weight: 1.0
+  frame_dino_frames: 2
+  frame_dino_num_local_masks: 4
+  frame_dino_global_mask_scale:
+  - 0.6
+  - 1.0
+  frame_dino_local_mask_scale:
+  - 0.3
+  - 0.6
+  frame_dino_ibot_mask_ratio:
+  - 0.3
+  - 0.7
+model_size: tiny
+ckpt_path: ./
+experiment_name: dinov2_temporal_all_pseudo_force_${model_size}_w15_prox_cls_d4_fe4_fdino_lr4e4
+trainer:
+  max_epochs: 500
+  validation_frequency: 50

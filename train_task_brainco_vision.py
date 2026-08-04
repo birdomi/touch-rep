@@ -34,7 +34,11 @@ from tactile_ssl.trainer import Trainer
 from tactile_ssl.data.brainco_grasp_vision_dataset import BraincoGraspVisionDataset
 from tactile_ssl.downstream_task.brainco_grasp_vision_sl import ResNet18GraspModule
 
+# Sensors whose runs are configured through cfg.task and split at the episode
+# level exactly like the tactile downstream scripts.
 SLIP_VISION_SENSOR = "brainco_slip_detection_vision"
+GRASP_W15_VISION_SENSOR = "brainco_grasp_prediction_w15_vision"
+EPISODE_FOLD_VISION_SENSORS = {SLIP_VISION_SENSOR, GRASP_W15_VISION_SENSOR}
 
 logger = get_pylogger(__name__)
 
@@ -149,12 +153,14 @@ def _instantiate_dataset_cached(dataset_cfg: DictConfig, **overrides):
     return _DATASET_CACHE[key]
 
 
-def get_dataloader_slip_vision(cfg: DictConfig):
-    """Episode-level K-fold split for the RGB slip-detection dataset.
+def get_dataloader_episode_fold_vision(cfg: DictConfig):
+    """Episode-level K-fold split for RGB window datasets.
 
-    Mirrors train_task_brainco_angle.py: the episode order is shuffled with
-    ``split_seed`` and cut into contiguous folds, so the vision baseline sees
-    the same episode partition as the tactile encoders.
+    Mirrors train_task_brainco_angle.py so a vision baseline sees the same
+    episode partition as the tactile encoders: episodes are shuffled with
+    ``split_seed`` and cut into contiguous folds, or — with
+    ``fold_by_episode_index`` — stratified so fold k holds out episode k of
+    every class (required when a class has only a handful of episodes).
     """
     import random
 
@@ -163,9 +169,10 @@ def get_dataloader_slip_vision(cfg: DictConfig):
     num_folds = int(cfg.get("num_folds", 5))
     seed      = int(cfg.get("split_seed", cfg.get("seed", 42)))
     val_fold  = fold % num_folds
+    stratified = bool(cfg.get("fold_by_episode_index", False))
 
     if data_cfg.get("dataset") is None:
-        raise ValueError("data.dataset must be set for the slip vision task")
+        raise ValueError("data.dataset must be set for episode-fold vision tasks")
 
     # Augmentation must not leak into validation, so the two splits read from
     # separate instances that share an identical window layout.
@@ -188,17 +195,31 @@ def get_dataloader_slip_vision(cfg: DictConfig):
         current += len(ep["window_starts"])
 
     all_episodes = list(dataset.episode_data)
-    rng = random.Random(seed)
-    rng.shuffle(all_episodes)
     n_ep = len(all_episodes)
 
-    def _fold_range(k):
-        size = n_ep // num_folds
-        start = k * size
-        end   = start + size if k < num_folds - 1 else n_ep
-        return range(start, end)
+    if stratified:
+        by_class: dict = {}
+        for ep in all_episodes:
+            by_class.setdefault(Path(ep["path"]).parent.name, []).append(ep)
+        ep_fold = {}
+        for eps in by_class.values():
+            eps.sort(key=lambda e: e["path"])
+            for i, ep in enumerate(eps):
+                ep_fold[ep["path"]] = i % num_folds
+        is_val = lambda rank, ep: ep_fold[ep["path"]] == val_fold  # noqa: E731
+    else:
+        rng = random.Random(seed)
+        rng.shuffle(all_episodes)
 
-    val_range = _fold_range(val_fold)
+        def _fold_range(k):
+            size = n_ep // num_folds
+            start = k * size
+            end   = start + size if k < num_folds - 1 else n_ep
+            return range(start, end)
+
+        val_range = _fold_range(val_fold)
+        is_val = lambda rank, ep: rank in val_range  # noqa: E731
+
     train_indices, val_indices = [], []
     train_ep_names, val_ep_names = [], []
 
@@ -206,7 +227,7 @@ def get_dataloader_slip_vision(cfg: DictConfig):
         start = ep_window_start[ep["path"]]
         wins  = list(range(start, start + len(ep["window_starts"])))
         name  = Path(ep["path"]).parent.name + "/" + Path(ep["path"]).name
-        if rank in val_range:
+        if is_val(rank, ep):
             val_indices.extend(wins);   val_ep_names.append(name)
         else:
             train_indices.extend(wins); train_ep_names.append(name)
@@ -216,9 +237,10 @@ def get_dataloader_slip_vision(cfg: DictConfig):
         for label, name in data_cfg.get("class_names", {0: "non-slip", 1: "slip"}).items()
     }
 
+    split_kind = "by-episode-index" if stratified else f"shuffled, seed={seed}"
     lines = [
-        f"\n=== Vision Slip Episode Split  (val_fold={val_fold}/{num_folds}, "
-        f"total={n_ep}, seed={seed}) ===",
+        f"\n=== Vision Episode Split  (val_fold={val_fold}/{num_folds}, "
+        f"total={n_ep}, {split_kind}) ===",
         f"  Train: {len(train_ep_names)} episodes  (augment={augment_train})",
         *[f"    [train] {n}" for n in train_ep_names],
         f"  Val:   {len(val_ep_names)} episodes",
@@ -238,7 +260,7 @@ def get_dataloader_slip_vision(cfg: DictConfig):
 
     split_log = "\n".join(lines)
     print(split_log)
-    (Path(cfg.paths.output_dir) / f"split_fold{val_fold}_vision_slip.txt").write_text(split_log)
+    (Path(cfg.paths.output_dir) / f"split_fold{val_fold}_vision.txt").write_text(split_log)
 
     g = torch.Generator()
     g.manual_seed(int(cfg.get("seed", 42)))
@@ -261,8 +283,8 @@ def get_dataloader_slip_vision(cfg: DictConfig):
 
 
 def get_dataloaders(cfg: DictConfig):
-    if cfg.data.sensor == SLIP_VISION_SENSOR:
-        return get_dataloader_slip_vision(cfg)
+    if cfg.data.sensor in EPISODE_FOLD_VISION_SENSORS:
+        return get_dataloader_episode_fold_vision(cfg)
     return get_dataloader_vision(cfg)
 
 
@@ -423,8 +445,8 @@ def get_dataloader_vision(cfg: DictConfig):
 # ── model ─────────────────────────────────────────────────────────────────
 
 def build_model(cfg: DictConfig):
-    """Slip runs are configured through cfg.task; grasp runs use top-level keys."""
-    if cfg.data.sensor == SLIP_VISION_SENSOR:
+    """Window runs are configured through cfg.task; legacy grasp uses top-level keys."""
+    if cfg.data.sensor in EPISODE_FOLD_VISION_SENSORS:
         return hydra.utils.instantiate(cfg.task)
 
     optim_cfg = partial(

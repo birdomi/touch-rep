@@ -47,3 +47,9 @@ attn_info:
 all_split: false
 num_folds: 5
 fold: 0
+# Assign each episode to a fold by its index within its own class, so every fold
+# validates the same number of episodes per class. The default (shuffle, then
+# contiguous blocks) only balances classes on average, which is unreliable when a
+# class has few episodes. Set this when episodes per class is small and divides
+# evenly by num_folds.
+fold_by_episode_index: false

@@ -1,0 +1,63 @@
+# @package _global_
+
+task_name: grasp_prediction
+experiment_name: vision_w15_${task_name}
+seed: 42
+# Kept separate from the training RNG so multi-seed runs use identical
+# episode-level folds unless explicitly requested otherwise.
+split_seed: 42
+
+hydra:
+  job:
+    id: ${now:%Y.%m.%d}_${now:%H-%M}
+  run:
+    dir: ${paths.log_dir}/brainco_grasp_prediction_vision/${hydra.job.id}_${experiment_name}
+
+wandb:
+  project: brainco_grasp_prediction
+  group: ~
+  tags: ["brainco", "vision", "resnet18", "grasp_prediction", "w15"]
+
+trainer:
+  max_epochs: 100
+  validation_frequency: 5
+  sanity_validate: true
+  save_checkpoint_dir: ${paths.output_dir}/checkpoints
+  checkpoint_interval_type: log
+  max_task_checkpoints: 1
+  # The ResNet has no `model_task` submodule, so probe-only saving would write
+  # an empty state dict.
+  save_probe_weights_only: false
+
+data:
+  train_data_budget: 1.0
+  val_data_budget: 1.0
+
+task:
+  _target_: tactile_ssl.downstream_task.ResNet18VisionWindowModule
+
+  pretrained: true
+  freeze_backbone: false
+  num_classes: 2
+
+  # "mean" pools frame features (order-agnostic); "concat" keeps the temporal
+  # order explicit; "diff" adds the last-minus-first feature difference.
+  frame_aggregation: concat
+  num_input_frames: ${data.num_frames_per_sample}
+  dropout: 0.0
+
+  class_weights: null
+  best_val_metric: balanced_accuracy
+  val_average_epochs: [20, 40, 60, 80, 100]
+  log_confusion_matrix_image: false
+
+  optim_cfg:
+    _partial_: true
+    _target_: torch.optim.AdamW
+    lr: 3e-4
+    weight_decay: 1e-4
+
+  scheduler_cfg:
+    _partial_: true
+    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+    T_max: ${trainer.max_epochs}

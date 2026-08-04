@@ -1,0 +1,40 @@
+# @package _global_
+#
+# ResNet18 vision baseline on slip_data_v3 with 15-frame windows, reading the
+# 1st, 5th and 15th frame of each window.
+#
+# Protocol copied from the tactile v3 runs
+# (experiment/brainco/ours_3d/task/slip_detection/temporal_w15_cls_d4_fe4_v3):
+# folds are stratified by episode index within class and num_folds must be 3 --
+# v3 has exactly 3 episodes per class, so fold k validates episode k of every
+# class and each fold holds out 6 episodes, one per class. The default shuffled
+# split would be wrong here: a random fold can take 2 episodes of one class and
+# none of another, making per-fold balanced accuracy meaningless.
+defaults:
+  - override /data: brainco_slip_detection_v3_vision
+  - override /task: brainco_slip_detection_vision
+  - _self_
+
+ssl_name: resnet18
+sensor: brainco
+experiment_name: slip_detection_v3_w15_resnet18
+ckpt_path: ./
+resume_id: ~
+
+fold: 0
+num_folds: 3
+fold_by_episode_index: true
+
+wandb:
+  entity: ryk9012-gwangju-institute-of-science-and-technology
+  project: brainco_xyz_slip_detection
+  group: vision_resnet18_v3_w15
+  tags: ["brainco", "vision", "resnet18", "slip_detection", "slip_data_v3", "w15"]
+
+task:
+  pretrained: true
+  freeze_backbone: false
+  frame_aggregation: concat
+  optim_cfg:
+    lr: 3e-4
+    weight_decay: 1e-4

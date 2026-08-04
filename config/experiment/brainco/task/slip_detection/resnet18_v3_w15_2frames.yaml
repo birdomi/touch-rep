@@ -1,0 +1,23 @@
+# @package _global_
+#
+# resnet18_v3_w15 with only the window's first and last frame (2 images instead
+# of 3). Everything else — 15-frame windows, 3-fold episode-index folds, the
+# slip_data_v3 class list — is inherited unchanged, so the delta against
+# resnet18_v3_w15 isolates the middle frame's contribution.
+defaults:
+  - /experiment/brainco/task/slip_detection/resnet18_v3_w15
+  - _self_
+
+experiment_name: slip_detection_v3_w15_2frames_resnet18
+
+wandb:
+  group: vision_resnet18_v3_w15_2frames
+  tags: ["brainco", "vision", "resnet18", "slip_detection", "slip_data_v3",
+         "w15", "2frames"]
+
+data:
+  # Feeds task.num_input_frames as well, so the concat head resizes with it.
+  num_frames_per_sample: 2
+  dataset:
+    config:
+      frame_positions: [1, 15]

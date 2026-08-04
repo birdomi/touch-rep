@@ -1,0 +1,29 @@
+# @package _global_
+#
+# resnet18_v3_w15 restricted to the object region.
+#
+# The room is a shortcut: every episode of a class is recorded in one continuous
+# take, so table clutter, the operator and the chair identify the episode long
+# before any slip is visible. The crop keeps only the grasped object and the two
+# fingertips.
+#
+# The raw frame is 640x480 and the object sits ABOVE the image centre (the lower
+# half is arms and table), so a plain centre crop removes the object itself —
+# measured on all six v3 classes, [208, 24, 224, 224] is the box that holds the
+# object plus both fingertips in every class.
+defaults:
+  - /experiment/brainco/task/slip_detection/resnet18_v3_w15
+  - _self_
+
+experiment_name: slip_detection_v3_w15_objectcrop_resnet18
+
+wandb:
+  group: vision_resnet18_v3_w15_objectcrop
+  tags: ["brainco", "vision", "resnet18", "slip_detection", "slip_data_v3",
+         "w15", "objectcrop"]
+
+data:
+  crop_mode: box
+  dataset:
+    config:
+      crop_box: [208, 24, 224, 224]   # left, top, width, height

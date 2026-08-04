@@ -1,0 +1,20 @@
+# @package _global_
+#
+# grasp_prediction for the jointonly encoder under the BrainCo-frame xyz pipeline.
+#
+# input_streams: pos must match the checkpoint. A jointonly checkpoint still
+# carries untrained sensor_embed / sensor_block tensors, so a default config
+# would load them and route real BrainCo force through a path that never saw a
+# gradient. Everything else -- align_xyz_to_npz: false, standardize_pos: false --
+# is inherited from grasp_temporal_w15_cls_d4_fe4.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/xyznorm/grasp_temporal_w15_cls_d4_fe4
+  - _self_
+
+experiment_name: xyznorm_grasp_jointonly
+
+task:
+  model_encoder:
+    frame_encoder:
+      input_streams: pos

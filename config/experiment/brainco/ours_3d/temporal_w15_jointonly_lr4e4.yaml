@@ -1,0 +1,87 @@
+# @package _global_
+
+# Temporal former, 15-frame windows, NO force input at all, lr 4e-4.
+#
+# The control arm for "how much does touch actually contribute". The frame
+# encoder is built with input_streams: pos, so the sensor stream is removed
+# structurally -- not zero-filled. No force or proximity value is ever embedded;
+# the frame sequence is registers + 10 pose tokens and nothing else.
+# Verified: sensor_embed/sensor_block receive zero gradient, and the encoder
+# output is bit-identical under any force input.
+#
+# Downstream evaluation MUST use the *_jointonly task configs, which set the
+# same input_streams: pos. The checkpoint still contains untrained
+# sensor_embed/sensor_block tensors; a default downstream config would load them
+# and route real force through an untrained path.
+#
+# Result at 500 epochs: grasp 0.8790, slip 0.5007 (BalAcc, 2 seeds).
+# Slip collapses to chance without force; grasp keeps most of its accuracy,
+# so grasp is largely a hand-kinematics task.
+#
+# Self-contained: no parent experiment config. Composed output is identical
+# to the pre-flattening chain (verified key by key).
+
+defaults:
+  - override /data: oakinkv2_arctic_taco_hot3d
+  - override /algorithm: temporal_dinov2
+  - _self_
+
+wandb:
+  project: dinov2
+  tags:
+  - all
+  - pseudo_force
+  - ${model_size}
+  - rope
+  - temporal_former
+  - w15
+  - joint_only
+  - no_force
+  - 42joint
+  - cls_frames
+  - former_d4
+  - frame_d4
+  - frame_dino
+  - lr4e-4
+  group: dino_temporal_all_pseudo_force_${model_size}_w15_jointonly_cls_d4_fe4_fdino_lr4e4
+data:
+  train_dataloader:
+    batch_size: 2048
+  sensor: all_pseudo_force
+  oakinkv2_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/oakinkv2
+  arctic_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/arctic
+  taco_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/taco
+  hot3d_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/hot3d
+  window_size: 15
+  window_stride: 5
+  sensor_channels:
+  - proximity
+algorithm:
+  encoder:
+    frame_token_set: cls
+    frame_encoder:
+      in_dim: 42
+      in_chans: 1
+      depth: 4
+      input_streams: pos
+  optim_cfg:
+    lr: 0.0004
+  frame_dino_loss_weight: 1.0
+  frame_ibot_loss_weight: 1.0
+  frame_dino_frames: 2
+  frame_dino_num_local_masks: 4
+  frame_dino_global_mask_scale:
+  - 0.6
+  - 1.0
+  frame_dino_local_mask_scale:
+  - 0.3
+  - 0.6
+  frame_dino_ibot_mask_ratio:
+  - 0.3
+  - 0.7
+model_size: tiny
+ckpt_path: ./
+experiment_name: dinov2_temporal_all_pseudo_force_${model_size}_w15_jointonly_cls_d4_fe4_fdino_lr4e4
+trainer:
+  max_epochs: 500
+  validation_frequency: 50

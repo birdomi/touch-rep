@@ -1,0 +1,38 @@
+# @package _global_
+#
+# ResNet18 vision baseline for grasp prediction with 15-frame windows, reading
+# the 1st, 5th and 15th frame of each window.
+#
+# Aligned with the tactile w15 grasp protocol
+# (experiment/brainco/ours_3d/task/xyznorm/grasp_temporal_w15_cls_d4_fe4):
+# grasp_prediction_0611 with all five objects (case included), 15-frame windows
+# enumerated as in BraincoSSLDataset, and the same shuffled episode-level
+# 4-fold split with split_seed 42 — unlike the older resnet18* experiments,
+# which cut folds by sorted episode number and therefore are not comparable.
+defaults:
+  - override /data: brainco_grasp_prediction_w15_vision
+  - override /task: brainco_grasp_prediction_w15_vision
+  - _self_
+
+ssl_name: resnet18
+sensor: brainco
+experiment_name: grasp_prediction_w15_resnet18
+ckpt_path: ./
+resume_id: ~
+
+fold: 0
+num_folds: 4
+
+wandb:
+  entity: ryk9012-gwangju-institute-of-science-and-technology
+  project: brainco_grasp_prediction
+  group: vision_resnet18_w15
+  tags: ["brainco", "vision", "resnet18", "grasp_prediction", "w15"]
+
+task:
+  pretrained: true
+  freeze_backbone: false
+  frame_aggregation: concat
+  optim_cfg:
+    lr: 3e-4
+    weight_decay: 1e-4

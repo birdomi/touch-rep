@@ -18,6 +18,7 @@ and ``proximity`` in that order.
 """
 
 import pickle
+import random
 from collections import Counter
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -41,6 +42,26 @@ _FINGERTIP_INDICES = (4, 8, 12, 16, 20)
 FINGERTIP_COLUMNS = tuple(_FINGERTIP_INDICES) + tuple(
     21 + i for i in _FINGERTIP_INDICES
 )
+
+
+def align_xyz_to_brainco_frame(finger_xyz: torch.Tensor) -> torch.Tensor:
+    """Convert pseudo-force NPZ fingertip XYZ to BrainCo's wrist-local frame.
+
+    Exact inverse of ``brainco_xyz_grasp_dataset._align_xyz_to_npz``, which maps
+    BrainCo ``(x, y, z)`` to NPZ order via ``[1, 2, 0]`` and then negates the
+    left hand's new x. Undoing it puts HOI into BrainCo's convention, so BrainCo
+    keeps its raw FK output everywhere -- pretraining, downstream and inference
+    -- and only the HOI loader converts.
+
+    Args:
+        finger_xyz: ``(..., 10, 3)``, left thumb..pinky then right.
+
+    Returns:
+        Same shape, in BrainCo wrist-local ``(x, y, z)``.
+    """
+    aligned = finger_xyz[..., [2, 0, 1]].clone()
+    aligned[..., :5, 1].neg_()
+    return aligned
 
 
 class _PseudoForceSequenceData:
@@ -218,6 +239,9 @@ class PseudoForceAngleDataset(data.Dataset):
         include_force_delta: bool = False,
         fingertip_only: bool = False,
         sensor_channels: Optional[List[str]] = None,
+        align_xyz_to_brainco: bool = False,
+        data_fraction: Optional[float] = None,
+        data_fraction_seed: int = 1234,
         _file_pattern: str = "*.pkl",
         _sequence_loader=_load_pseudo_force_sequence,
     ):
@@ -258,6 +282,25 @@ class PseudoForceAngleDataset(data.Dataset):
         n_train = max(1, int(len(all_pkl) * min(max(train_val_split, 0.0), 1.0)))
         if split == "train":
             pkl_files = all_pkl[:n_train]
+            # Data-scaling study: keep a fraction of the training corpus. The
+            # order is shuffled once with a fixed seed and then sliced from the
+            # front, so the subsets nest (1% subset of 2% subset of 5% ...) and
+            # the curve measures added data rather than a different sample each
+            # time. Applied per corpus, so the domain mix is preserved.
+            if data_fraction is not None and data_fraction < 1.0:
+                if not 0.0 < data_fraction <= 1.0:
+                    raise ValueError(
+                        f"data_fraction must be in (0, 1], got {data_fraction}"
+                    )
+                order = list(pkl_files)
+                random.Random(data_fraction_seed).shuffle(order)
+                keep = max(1, int(round(len(order) * data_fraction)))
+                kept = set(order[:keep])
+                pkl_files = [p for p in pkl_files if p in kept]
+                log.info(
+                    f"  data_fraction={data_fraction}: keeping {len(pkl_files)}"
+                    f"/{n_train} train files"
+                )
         else:
             pkl_files = all_pkl[n_train:]
             if not pkl_files:
@@ -268,6 +311,17 @@ class PseudoForceAngleDataset(data.Dataset):
         log.info(f"  {split}: loading {len(pkl_files)} files")
         self._sequences = [_sequence_loader(path) for path in pkl_files]
         self._seq_paths = pkl_files
+
+        # Convert once per sequence, not per window: BrainCo keeps its raw FK
+        # output everywhere (pretraining, downstream, inference) and HOI is the
+        # only corpus that moves. Without this the two fingertip frames are a
+        # cyclic axis permutation apart -- HOI's long finger axis is y, BrainCo's
+        # is z -- so a pos embedding transfers into a rotated geometry.
+        self.align_xyz_to_brainco = bool(align_xyz_to_brainco)
+        if self.align_xyz_to_brainco:
+            for sequence in self._sequences:
+                sequence.finger_xyz = align_xyz_to_brainco_frame(sequence.finger_xyz)
+            log.info(f"  finger_xyz converted to the BrainCo wrist frame ({len(self._sequences)} sequences)")
 
         self.windows: List[Tuple[int, int]] = []
         for seq_index, sequence in enumerate(self._sequences):

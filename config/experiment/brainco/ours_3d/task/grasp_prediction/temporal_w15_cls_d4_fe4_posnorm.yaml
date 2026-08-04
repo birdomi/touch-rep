@@ -1,0 +1,35 @@
+# @package _global_
+
+# temporal_w15_cls_d4_fe4 (force + pose) with the pose stream standardised.
+#
+# The force-arm counterpart of *_jointonly_posnorm. The force stream is already
+# standardised by the signal_mean/signal_std buffers; the pose stream is not, and
+# for BrainCo it is wrist-local fingertip position in metres with per-channel std
+# [0.0345, 0.0248, 0.0094]. On the pose-only arm that difference was the whole
+# story -- scratch went from 0.5000 to 0.80 BalAcc once the pose was normalised.
+#
+# The question here is narrower: the force arm already trains fine at 0.8499
+# because the tactile channel carries the label almost directly, so this measures
+# how much of the remaining headroom was lost to an unusable pose stream.
+#
+# Statistics are per-channel over all 1180 grasp windows, matching the
+# *_jointonly_posnorm config so the two are directly comparable.
+#
+# IMPORTANT: only for arms trained under this setting. Every checkpoint
+# pretrained so far learned on raw-scale pose.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/temporal_w15_cls_d4_fe4
+  - _self_
+
+experiment_name: brainco_xyz_grasp_prediction_temporal_w15_cls_d4_fe4_posnorm
+
+wandb:
+  group: temporal_w15_cls_d4_fe4_posnorm_grasp
+  tags: ["brainco", "xyz", "grasp_prediction", "temporal_former", "w15", "cls",
+         "former_d4", "frame_d4", "42joint", "posnorm"]
+
+task:
+  pos_normalization:
+    mean: [0.000384, 0.116972, 0.029616]
+    std: [0.034511, 0.024843, 0.009360]

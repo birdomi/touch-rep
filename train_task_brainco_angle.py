@@ -160,7 +160,9 @@ def _compute_signal_stats(
     return mean.float(), std.float()
 
 
-def _attach_train_signal_stats(train_dataset: data.Dataset) -> None:
+def _attach_train_signal_stats(
+    train_dataset: data.Dataset, standardize_pos: bool = False
+) -> None:
     signal_mean, signal_std = _compute_signal_stats(train_dataset)
     train_dataset.computed_signal_mean = signal_mean
     train_dataset.computed_signal_std = signal_std
@@ -168,6 +170,17 @@ def _attach_train_signal_stats(train_dataset: data.Dataset) -> None:
         "Signal normalization from training split only: "
         f"mean={signal_mean.tolist()}, std={signal_std.tolist()}"
     )
+    # The pretrained encoders z-score their position stream, so the downstream
+    # split has to arrive in the same range or the pos embedding sees a shifted
+    # geometry. Same train-split-only rule as the signal stats above.
+    if standardize_pos:
+        pos_mean, pos_std = _compute_signal_stats(train_dataset, input_key="finger_xyz")
+        train_dataset.computed_pos_mean = pos_mean
+        train_dataset.computed_pos_std = pos_std
+        logger.info(
+            "Position normalization from training split only: "
+            f"mean={pos_mean.tolist()}, std={pos_std.tolist()}"
+        )
 
 
 # ── wandb ──────────────────────────────────────────────────────────────────────
@@ -268,7 +281,7 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
             budget = int(len(val_dset) * data_cfg.val_data_budget)
             val_dset, _ = data.random_split(val_dset, [budget, len(val_dset) - budget], generator=g)
 
-        _attach_train_signal_stats(train_dset)
+        _attach_train_signal_stats(train_dset, bool(data_cfg.get("standardize_pos", False)))
 
         print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val")
 
@@ -284,17 +297,38 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
         current += len(ep["window_starts"])
 
     all_episodes = list(dataset.episode_data)
-    rng = random.Random(seed)
-    rng.shuffle(all_episodes)
     n_ep = len(all_episodes)
 
-    def _fold_range(k):
-        sz = n_ep // num_folds
-        s  = k * sz
-        e  = s + sz if k < num_folds - 1 else n_ep
-        return range(s, e)
+    # Stratified folds: assign each episode to a fold by its position within its
+    # own class, so every fold validates the same number of episodes per class.
+    # The default (shuffle + contiguous block) only balances classes on average,
+    # which breaks down when a class has just a few episodes -- with 3 episodes
+    # per class a random fold can take 2 of one class and none of another.
+    stratified = bool(cfg.get("fold_by_episode_index", False))
 
-    val_range = _fold_range(val_fold)
+    if stratified:
+        by_class: dict = {}
+        for ep in all_episodes:
+            by_class.setdefault(Path(ep["path"]).parent.name, []).append(ep)
+        ep_fold = {}
+        for cls, eps in by_class.items():
+            eps.sort(key=lambda e: e["path"])
+            for i, ep in enumerate(eps):
+                ep_fold[ep["path"]] = i % num_folds
+        is_val = lambda rank, ep: ep_fold[ep["path"]] == val_fold  # noqa: E731
+    else:
+        rng = random.Random(seed)
+        rng.shuffle(all_episodes)
+
+        def _fold_range(k):
+            sz = n_ep // num_folds
+            s  = k * sz
+            e  = s + sz if k < num_folds - 1 else n_ep
+            return range(s, e)
+
+        val_range = _fold_range(val_fold)
+        is_val = lambda rank, ep: rank in val_range  # noqa: E731
+
     train_indices, val_indices = [], []
     train_ep_names, val_ep_names = [], []
 
@@ -303,7 +337,7 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
         start = ep_window_start[ep["path"]]
         wins  = list(range(start, start + n_win))
         name  = Path(ep["path"]).parent.name + "/" + Path(ep["path"]).name
-        if rank in val_range:
+        if is_val(rank, ep):
             val_indices.extend(wins);   val_ep_names.append(name)
         else:
             train_indices.extend(wins); train_ep_names.append(name)
@@ -361,7 +395,7 @@ def get_dataloader_brainco_angle_grasp(cfg: DictConfig):
         budget = int(len(val_dset) * data_cfg.val_data_budget)
         val_dset, _ = data.random_split(val_dset, [budget, len(val_dset) - budget], generator=g)
 
-    _attach_train_signal_stats(train_dset)
+    _attach_train_signal_stats(train_dset, bool(data_cfg.get("standardize_pos", False)))
 
     print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val")
 
@@ -444,7 +478,7 @@ def get_dataloader_brainco_angle_oc(cfg: DictConfig):
         budget = int(len(val_dset) * data_cfg.val_data_budget)
         val_dset, _ = data.random_split(val_dset, [budget, len(val_dset) - budget], generator=g)
 
-    _attach_train_signal_stats(train_dset)
+    _attach_train_signal_stats(train_dset, bool(data_cfg.get("standardize_pos", False)))
 
     print(f"Total windows: {len(train_dset)} train, {len(val_dset)} val")
 
@@ -557,10 +591,17 @@ def train(cfg: DictConfig):
     if sensor_channels is not None:
         signal_mean = signal_mean[sensor_channels]
         signal_std = signal_std[sensor_channels]
-    model.model_encoder.update_stats(signal_mean, signal_std)
+    pos_kwargs = {}
+    if hasattr(train_stats, "computed_pos_mean"):
+        pos_kwargs = {
+            "pos_mean": train_stats.computed_pos_mean,
+            "pos_std": train_stats.computed_pos_std,
+        }
+    model.model_encoder.update_stats(signal_mean, signal_std, **pos_kwargs)
     logger.info(
         "Encoder normalization updated from downstream training split: "
         f"mean={signal_mean.tolist()}, std={signal_std.tolist()}"
+        + (f", pos_mean={pos_kwargs['pos_mean'].tolist()}" if pos_kwargs else "")
     )
 
     trainer = Trainer(wandb_logger=wb, **cfg.trainer)

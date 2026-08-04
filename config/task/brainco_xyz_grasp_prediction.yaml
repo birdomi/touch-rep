@@ -17,7 +17,7 @@ wandb:
   tags: ["brainco", "xyz", "grasp_prediction"]
 
 trainer:
-  max_epochs: 50
+  max_epochs: 100
   validation_frequency: 5
   sanity_validate: true
   save_checkpoint_dir: ${paths.output_dir}/checkpoints
@@ -61,6 +61,10 @@ task:
   # Input channel subset (null = all 4). e.g. [0, 1, 2] drops proximity;
   # model_encoder in_chans must match its length.
   sensor_channels: null
+  # Standardise the pose stream before the encoder. null = raw metres, which is
+  # what every checkpoint pretrained so far expects. Only enable it for arms
+  # trained under the same setting -- see brainco_angle_grasp_sl.py.
+  pos_normalization: null
 
   model_task:
     _target_: tactile_ssl.downstream_task.MeanPoolProbe
@@ -75,7 +79,7 @@ task:
   task_lr: 1e-4
   encoder_warmup_fine_tune_sensor_epochs: 0
   encoder_warmup_fine_tune_sensor_shallow_blocks: ~
-  val_average_epochs: [10, 20, 30, 40, 50]
+  val_average_epochs: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
   log_confusion_matrix_image: false
 
   optim_cfg:

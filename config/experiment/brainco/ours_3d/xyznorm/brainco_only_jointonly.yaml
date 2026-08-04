@@ -1,0 +1,32 @@
+# @package _global_
+#
+# BrainCo SSL from random init with the sensor stream removed (input_streams:
+# pos) -- the jointonly architecture trained on BrainCo teleop instead of being
+# taken from the HOI jointonly checkpoint.
+#
+# Pairs with xyznorm/temporal_w15_jointonly (same architecture, HOI data) to ask
+# whether BrainCo's own 44 minutes of teleop can teach the pose-only
+# representation, or whether the HOI corpus is doing the work. Both are
+# evaluated with task/xyznorm/{grasp,slip}_jointonly, which set the same
+# input_streams: pos -- a default task config would route real BrainCo force
+# through a path that never saw a gradient.
+#
+# Batch 512 / lr 1e-4 / 1000 epochs, matching xyznorm/brainco_only so the only
+# difference against that arm is the missing force stream.
+
+defaults:
+  - /experiment/brainco/ours_3d/xyznorm/brainco_only
+  - _self_
+
+wandb:
+  group: dino_temporal_brainco_${model_size}_w15_jointonly
+
+algorithm:
+  encoder:
+    frame_encoder:
+      input_streams: pos
+
+experiment_name: xyznorm_brainco_only_jointonly
+hydra:
+  run:
+    dir: ${paths.log_dir}/${now:%Y.%m.%d}/${experiment_name}

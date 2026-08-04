@@ -1,0 +1,34 @@
+# @package _global_
+
+# slip_data_v3 + joint-only: the v3 data/fold setup with the sensor stream
+# removed from the downstream encoder as well (input_streams: pos).
+#
+# Both halves are required. Inheriting only the v3 config would build a
+# downstream encoder with a sensor stream and load the joint-only checkpoint's
+# untrained sensor_embed/sensor_block into it, pushing real force through a path
+# that never saw gradient. Inheriting only the jointonly config would evaluate on
+# v2. This file is the v3 x joint-only cell.
+#
+# Inherited from the v3 config: slip_data_v3 path, the 6 v3 classes,
+# fold_by_episode_index (use --num-folds 3).
+#
+# On v2 this arm collapsed to chance (0.5007 BalAcc, both ep100 and ep500), so
+# the question here is whether v3's longer episodes carry any pose-only slip
+# signal at all.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/temporal_w15_cls_d4_fe4_v3
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_temporal_w15_cls_d4_fe4_v3_jointonly
+
+wandb:
+  group: temporal_w15_cls_d4_fe4_v3_jointonly_slip
+  tags: ["brainco", "xyz", "slip_detection", "temporal_former", "w15", "cls",
+         "former_d4", "frame_d4", "42joint", "slip_data_v3", "joint_only",
+         "no_force"]
+
+task:
+  model_encoder:
+    frame_encoder:
+      input_streams: pos

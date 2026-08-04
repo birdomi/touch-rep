@@ -1,0 +1,25 @@
+# @package _global_
+#
+# resnet18_w15 restricted to the object region, for the same reason as
+# slip_detection/resnet18_v3_w15_objectcrop: cut the room away so the network
+# cannot identify an episode from scene context.
+#
+# The 0611 rig frames the workspace differently from the slip rig — the object
+# sits slightly below centre — so this box is [190, 150, 260, 260], measured to
+# hold the object plus both gripper fingers across all five objects. It is
+# tighter than the inherited bottom_center 320 crop.
+defaults:
+  - /experiment/brainco/task/grasp_prediction/resnet18_w15
+  - _self_
+
+experiment_name: grasp_prediction_w15_objectcrop_resnet18
+
+wandb:
+  group: vision_resnet18_w15_objectcrop
+  tags: ["brainco", "vision", "resnet18", "grasp_prediction", "w15", "objectcrop"]
+
+data:
+  crop_mode: box
+  dataset:
+    config:
+      crop_box: [190, 150, 260, 260]   # left, top, width, height

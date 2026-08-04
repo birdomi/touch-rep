@@ -1,0 +1,46 @@
+# @package _global_
+
+# Deployment fine-tune: temporal_w15_cls_d4_fe4 on 100% of the slip data, from
+# the fdino_lr4e4 epoch-0380 pretraining checkpoint. Produces a single model to
+# ship to the robot, not a measurement -- there is no held-out split here.
+#
+# Architecture is inherited unchanged from temporal_w15_cls_d4_fe4 and matches
+# the checkpoint tensor for tensor (former d4 / frame encoder d4 / in_dim 42 /
+# rope_hand_offset 10). frame_encoder.in_chans stays 4 against the 1-channel
+# prox pretraining, so sensor_embed is reinitialized -- same as every reported
+# prox evaluation. encoder_lr 1e-4 is the LR all the seed/OOD numbers were
+# measured at (slip BalAcc ~0.69 under 4-fold CV).
+
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/temporal_w15_cls_d4_fe4
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_deploy_fdino_lr4e4_ep380
+
+wandb:
+  group: deploy_temporal_w15_cls_d4_fe4_slip
+  tags: ["brainco", "xyz", "slip_detection", "temporal_former", "w15", "cls",
+         "former_d4", "frame_d4", "42joint", "deploy", "full_train"]
+
+data:
+  # Train on every episode. Setting val_dataset takes the explicit-split branch
+  # in get_dataloader_brainco_angle_grasp(), which uses all windows of
+  # data.dataset for training. Pointing it back at data.dataset makes the
+  # validation loop report TRAIN-set metrics -- a fit monitor only, never a
+  # generalization estimate. _instantiate_dataset_cached keys on the resolved
+  # config, so the identical spec is built once and shared.
+  val_dataset: ${data.dataset}
+
+trainer:
+  # The encoder is fine-tuned (train_encoder: true), so a probe-only checkpoint
+  # would be useless for inference: it must carry model_encoder.* too,
+  # including the signal_mean/signal_std buffers that train.py writes from the
+  # training split.
+  save_probe_weights_only: false
+  checkpoint_interval_type: linear
+  max_task_checkpoints: 11   # epoch-0000, 0005, ..., 0050 (.pth state_dicts)
+
+task:
+  checkpoint_encoder: experiments/dinov2_temporal_all_pseudo_force_tiny_w15_prox_cls_d4_fe4_fdino_lr4e4/2026.07.29-16-48/checkpoints/epoch-0380.ckpt
+  encoder_lr: 1e-4
+  task_lr: 1e-4

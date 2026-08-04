@@ -1,0 +1,44 @@
+# @package _global_
+
+# temporal_w15_cls_d4_fe4 on slip_data_v3 instead of slip_data_v2.
+#
+# v3 is a different collection, not an extension of v2:
+#   episodes  18 (3 per class) vs 97
+#   classes    6 (slip_box, slip_box2, slip_case, slip_case2, slip_doll,
+#                 slip_plastic) vs 4 (slip_evacase is gone; box2/case2 are new)
+#   length     1795-3775 frames per episode vs 220-446
+# So v3 has fewer but much longer episodes, and more total frames.
+#
+# The label schema is identical (slip_start_frame_index / slip_end_frame_index),
+# so the same dataset class and window settings apply unchanged.
+#
+# Folds are stratified by episode index within class (fold_by_episode_index),
+# and num_folds must be 3 to match the 3 episodes per class: fold k validates
+# episode k of every class, so each fold holds out exactly 6 episodes, one per
+# class, and every episode is validated exactly once.
+#
+# The default split (shuffle, then contiguous blocks) would be wrong here -- with
+# only 3 episodes per class a random fold can take 2 of one class and none of
+# another, making per-fold balanced accuracy meaningless.
+#
+# Everything else is inherited: former depth 4, frame encoder depth 4,
+# CLS-frames former input, CLS readout, 15-frame window.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/temporal_w15_cls_d4_fe4
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_temporal_w15_cls_d4_fe4_v3
+
+wandb:
+  group: temporal_w15_cls_d4_fe4_v3_slip
+  tags: ["brainco", "xyz", "slip_detection", "temporal_former", "w15", "cls",
+         "former_d4", "frame_d4", "42joint", "slip_data_v3"]
+
+fold_by_episode_index: true
+
+data:
+  dataset:
+    data_path: ${paths.data_root}/brainco/downstream/slip_data_v3
+    config:
+      classes: [slip_box, slip_box2, slip_case, slip_case2, slip_doll, slip_plastic]

@@ -1,0 +1,116 @@
+# @package _global_
+#
+# BrainCo teleop pretraining from the HOI checkpoint, GENTLY: no warmup, 100
+# epochs, a very low learning rate.
+#
+# Why this exists. The lr 4e-4 / 1000-epoch pair showed BrainCo SSL *eroding*
+# the HOI representation on grasp: pure HOI scored 0.9411 BalAcc while the same
+# checkpoint after BrainCo SSL scored 0.9008, and the epoch-100 snapshot of that
+# run was already worse (0.8958 at seed 0) than HOI untouched. Slip went the
+# other way but only just. The hypothesis is that 4e-4 is simply too large for
+# weights that are already good, so this run adapts as little as possible:
+#
+#   lr 1e-5           40x below the twin, cosine-decayed to 1e-6
+#   warmup_epochs 0   no ramp -- a warmup from start_lr 1e-5 up to a base lr of
+#                     1e-5 would be a no-op anyway, and at this scale the first
+#                     epochs are the ones that matter
+#   100 epochs        ~6.2k steps; the erosion was already visible by then at
+#                     4e-4, so this is the window where the comparison is fair
+#
+# Everything else -- data, architecture, source checkpoint, init_skip_keys --
+# is identical to brainco_temporal_w15_hoi_init.yaml.
+#
+# Read the outcome against two references, not one:
+#   hoionly   0.9411 grasp / 0.7649 slip (BalAcc, Best Epoch, seeds 0+1)
+#   hoi_init  0.9008 grasp / 0.7697 slip   (lr 4e-4, 1000 epochs)
+# Landing at hoionly means the run was effectively a no-op -- informative, since
+# it says no amount of gentle BrainCo SSL buys anything on grasp. Landing above
+# it means the erosion really was an lr artefact.
+#
+# Note on sensor_embed: it is still randomly initialised here (in_chans 1 -> 4
+# cannot transfer), so at lr 1e-5 it barely trains during pretraining. That is
+# acceptable -- the downstream task relearns the force projection regardless, and
+# hoionly wins its 0.9411 with exactly that projection random at load time.
+#
+# Self-contained: no parent experiment config.
+
+defaults:
+  - override /data: brainco_temporal_pretraining
+  - override /algorithm: temporal_dinov2
+  - _self_
+
+wandb:
+  project: dinov2
+  tags:
+  - brainco
+  - teleop
+  - ${model_size}
+  - rope
+  - temporal_former
+  - w15
+  - force_cossin
+  - fingertip
+  - cls_frames
+  - frame_d4
+  - frame_dino
+  - hoi_init
+  - gentle
+  - no_warmup
+  - lr${lr_tag}
+  group: dino_temporal_brainco_${model_size}_w15_force_cossin_gentle
+
+data:
+  train_dataloader:
+    batch_size: 2048
+
+algorithm:
+  # BraincoSSLDataset names its two streams "sensor" / "sensor_poses" where the
+  # HOI dataset says "joint_force" / "finger_xyz". Same tensors, same channel
+  # order, same units.
+  sensor_input_key: sensor
+  pos_input_key: sensor_poses
+  encoder:
+    frame_token_set: cls
+    frame_encoder:
+      in_dim: 10        # 10 fingertip sensors, left 0-4 then right 5-9
+      in_chans: 4       # [Fn, Ft*cos, Ft*sin, proximity]
+      pos_in_dim: 10
+      pos_in_chans: 3   # fingertip XYZ
+      depth: 4
+  optim_cfg:
+    lr: 1.0e-5
+  lr_scheduler_cfg:
+    warmup_epochs: 0
+    start_lr: 1.0e-5    # unused at warmup_epochs 0, kept consistent with lr
+    final_lr: 1.0e-6
+  frame_dino_loss_weight: 1.0
+  frame_ibot_loss_weight: 1.0
+  frame_dino_frames: 2
+  frame_dino_num_local_masks: 4
+  frame_dino_global_mask_scale:
+  - 0.6
+  - 1.0
+  frame_dino_local_mask_scale:
+  - 0.3
+  - 0.6
+  frame_dino_ibot_mask_ratio:
+  - 0.3
+  - 0.7
+
+model_size: tiny
+ckpt_path: ./
+init_from_ckpt: ./experiments/dinov2_temporal_all_pseudo_force_tiny_tip_w15_prox_cls_d4_fe4_fdino_lr4e4/2026.07.29-17-47/checkpoints/epoch-0500.ckpt
+# Relearn the force input projection from scratch; transfer everything above it.
+init_skip_keys:
+- sensor_embed.
+
+# Override both together to sweep the rate, e.g.
+#   algorithm.optim_cfg.lr=5e-5 lr_tag='"5e5"'
+# Quoted: bare 1e5 is parsed as the float 100000.0 and lands in the run name.
+lr_tag: "1e5"
+experiment_name: dinov2_temporal_brainco_${model_size}_w15_force_cossin_hoi_init_gentle_lr${lr_tag}
+
+# 20-epoch snapshots so erosion, if any, can be traced across the short run.
+trainer:
+  max_epochs: 100
+  checkpoint_frequency: 20

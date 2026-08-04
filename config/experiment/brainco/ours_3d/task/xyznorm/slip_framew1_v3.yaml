@@ -1,0 +1,28 @@
+# @package _global_
+#
+# slip_detection on slip_data_v3 for the frame-wise (window-1) encoders, under
+# the BrainCo-frame xyz pipeline.
+#
+# Same frame-wise stack as grasp_framew1, plus the v3 collection settings the
+# temporal v3 config uses: 6 classes, 3 episodes each, folds stratified by
+# episode index so every fold holds out one episode per class.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/dinov2_all_rope_w15
+  - _self_
+
+experiment_name: xyznorm_slip_framew1_v3
+
+wandb:
+  group: xyznorm_slip_framew1
+  tags: ["brainco", "xyz", "slip_detection", "frame_w1", "slip_data_v3", "xyznorm"]
+
+fold_by_episode_index: true
+
+data:
+  standardize_pos: false
+  dataset:
+    data_path: ${paths.data_root}/brainco/downstream/slip_data_v3
+    config:
+      align_xyz_to_npz: false
+      classes: [slip_box, slip_box2, slip_case, slip_case2, slip_doll, slip_plastic]

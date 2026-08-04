@@ -1,0 +1,21 @@
+# @package _global_
+#
+# resnet18_w15 with only the window's first and last frame (2 images instead of
+# 3). Everything else — 15-frame windows, tactile window enumeration, the
+# five-object 0611 set, split_seed 42 4-fold — is inherited unchanged.
+defaults:
+  - /experiment/brainco/task/grasp_prediction/resnet18_w15
+  - _self_
+
+experiment_name: grasp_prediction_w15_2frames_resnet18
+
+wandb:
+  group: vision_resnet18_w15_2frames
+  tags: ["brainco", "vision", "resnet18", "grasp_prediction", "w15", "2frames"]
+
+data:
+  # Feeds task.num_input_frames as well, so the concat head resizes with it.
+  num_frames_per_sample: 2
+  dataset:
+    config:
+      frame_positions: [1, 15]

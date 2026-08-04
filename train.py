@@ -60,6 +60,69 @@ def _maybe_update_encoder_stats(algorithm, sensor_means, sensor_stds, pos_mean=N
             logger.info(f"Called update_stats() on {name}")
 
 
+def load_pretrained_weights(algorithm, ckpt_path: str, skip_keys=None):
+    """Initialise the algorithm's weights from another run, without its state.
+
+    Unlike ``trainer.fit(ckpt_path=...)`` -- which resumes optimizer, scheduler
+    and epoch counter -- this copies parameters only, so the run starts at epoch
+    0 with a fresh optimizer. Tensors whose shape disagrees with the current
+    architecture are left at their init values and reported, so an architecture
+    mismatch is visible in the log rather than silently halving the transfer.
+
+    The checkpoint's ``signal_mean`` / ``signal_std`` buffers do get copied here,
+    exactly as ``SLModule.load_encoder`` copies them downstream. The caller then
+    overwrites them through ``_maybe_update_encoder_stats`` with the stats this
+    run's own dataloader computed, so the source dataset's scale never survives.
+
+    Args:
+        skip_keys: substrings; any state_dict key containing one is left at its
+            random init. Use it to retrain a submodule from scratch while the
+            rest of the network transfers.
+    """
+    if not os.path.isfile(ckpt_path):
+        raise FileNotFoundError(f"init_from_ckpt not found: {ckpt_path}")
+
+    patterns = list(skip_keys or [])
+    checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    source = checkpoint.get("model", checkpoint)
+    target = algorithm.state_dict()
+
+    accepted, skipped_shape, skipped_by_request = {}, [], []
+    for key, tensor in source.items():
+        if key not in target:
+            continue
+        if any(pattern in key for pattern in patterns):
+            skipped_by_request.append(key)
+        elif target[key].shape != tensor.shape:
+            skipped_shape.append(f"{key} {tuple(tensor.shape)}->{tuple(target[key].shape)}")
+        else:
+            accepted[key] = tensor
+
+    deliberate = set(skipped_by_request) | {entry.split(" ")[0] for entry in skipped_shape}
+    missing = [k for k in target if k not in accepted and k not in deliberate]
+    algorithm.load_state_dict(accepted, strict=False)
+
+    logger.info(
+        f"Initialised weights from {ckpt_path} "
+        f"(source epoch {checkpoint.get('current_epoch', '?')}): "
+        f"{len(accepted)}/{len(target)} tensors loaded"
+    )
+    if skipped_by_request:
+        logger.info(
+            f"  randomly initialised on request ({patterns}): "
+            f"{len(skipped_by_request)} tensors"
+        )
+        for key in skipped_by_request:
+            logger.info(f"    {key}")
+    if skipped_shape:
+        logger.warning(f"  shape mismatch, left at init: {skipped_shape}")
+    if missing:
+        logger.warning(f"  not present in checkpoint, left at init: {len(missing)} tensors")
+        for key in missing[:10]:
+            logger.warning(f"    {key}")
+    return algorithm
+
+
 def _build_angle_vector_dataset(cfg: DictConfig, data_root: str):
     from tactile_ssl.data.angle_tactile import AngleTactileDataset
 
@@ -244,6 +307,9 @@ def get_dataloaders_all_pseudo_force_based(cfg: DictConfig):
         "include_force_delta": bool(data_cfg.get("include_force_delta", False)),
         "fingertip_only": bool(data_cfg.get("fingertip_only", False)),
         "sensor_channels": list(data_cfg.get("sensor_channels") or []) or None,
+        "align_xyz_to_brainco": bool(data_cfg.get("align_xyz_to_brainco", False)),
+        "data_fraction": data_cfg.get("data_fraction", None),
+        "data_fraction_seed": int(data_cfg.get("data_fraction_seed", 1234)),
     }
 
     train_dsets, val_dsets, all_train_sequences = [], [], []
@@ -289,6 +355,32 @@ def get_dataloaders_all_pseudo_force_based(cfg: DictConfig):
     train_dset.sensor_std = sensor_std
     val_dset.sensor_mean = sensor_mean
     val_dset.sensor_std = sensor_std
+
+    # A small data_fraction leaves only a couple of batches per epoch, and the
+    # per-epoch overhead (loader restart, EMA, scheduler, logging) then dwarfs
+    # the two optimizer steps -- the 1% run measured 35 epochs/min against a
+    # 49,200-step budget, i.e. 12 hours of mostly bookkeeping. Repeating the
+    # subset inside one epoch restores a normal epoch length: identical data,
+    # batch, learning rate and total steps, only the epoch bookkeeping changes.
+    fraction = data_cfg.get("data_fraction", None)
+    if fraction is not None and float(fraction) < 1.0:
+        repeat = max(1, round(1.0 / float(fraction)))
+        train_dset = data.ConcatDataset([train_dset] * repeat)
+        train_dset.sensor_mean = sensor_mean
+        train_dset.sensor_std = sensor_std
+        logger.info(
+            f"data_fraction={fraction}: repeating the train split x{repeat} per "
+            f"epoch -> {len(train_dset)} windows/epoch"
+        )
+
+    if bool(data_cfg.get("standardize_pos", False)):
+        pos_mean, pos_std = _compute_pos_stats(
+            sequence.finger_xyz for sequence in all_train_sequences
+        )
+        logger.info(f"Pseudo-force pos z-score: mean={pos_mean}, std={pos_std}")
+        for dataset in train_dsets + val_dsets + [train_dset, val_dset]:
+            dataset.pos_mean = pos_mean
+            dataset.pos_std = pos_std
 
     logger.info(
         f"ALL pseudo-force: {len(train_dset)} train windows, "
@@ -346,6 +438,62 @@ def get_dataloaders_compact_pseudo_force_based(cfg: DictConfig):
     return train_dset, val_dset
 
 
+def _compute_pos_stats(arrays):
+    """Per-axis mean/std of the fingertip position stream over the train split.
+
+    `arrays` is any iterable of (..., 3) arrays or tensors. The result is stamped
+    onto the encoder's pos_mean / pos_std buffers, which are identity unless a
+    config asks for this, so nothing changes for runs that do not.
+    """
+    total = np.zeros(3, dtype=np.float64)
+    total_sq = np.zeros(3, dtype=np.float64)
+    count = 0
+    for array in arrays:
+        flat = np.asarray(
+            array.numpy() if hasattr(array, "numpy") else array, dtype=np.float64
+        ).reshape(-1, 3)
+        total += flat.sum(axis=0)
+        total_sq += np.square(flat).sum(axis=0)
+        count += flat.shape[0]
+
+    if count == 0:
+        raise ValueError("No fingertip positions available to compute pos stats.")
+
+    mean = total / count
+    std = np.sqrt(np.maximum(total_sq / count - np.square(mean), 0.0))
+    std[std < 1e-8] = 1.0
+    return mean.tolist(), std.tolist()
+
+
+def _compute_brainco_channel_stats(datasets, num_channels: int = 4):
+    """Per-channel mean/std of the sensor stream the encoder actually receives.
+
+    ``BraincoSSLDataset.__getitem__`` divides the tactile array by its fixed
+    ``max_values``, so the stats are accumulated on the divided values. The
+    z-score is affine-invariant, so this matches whitening the raw counts --
+    it only keeps the reported numbers consistent with the batch contents.
+    """
+    total = np.zeros(num_channels, dtype=np.float64)
+    total_sq = np.zeros(num_channels, dtype=np.float64)
+    count = 0
+    for ds in datasets:
+        scaled = np.asarray(ds.tactile_array, dtype=np.float64) / np.asarray(
+            ds.max_values, dtype=np.float64
+        )
+        flat = scaled.reshape(-1, num_channels)
+        total += flat.sum(axis=0)
+        total_sq += np.square(flat).sum(axis=0)
+        count += flat.shape[0]
+
+    if count == 0:
+        raise ValueError("No BrainCo frames available to compute channel stats.")
+
+    mean = total / count
+    std = np.sqrt(np.maximum(total_sq / count - np.square(mean), 0.0))
+    std[std < 1e-8] = 1.0
+    return mean.tolist(), std.tolist()
+
+
 def get_dataloaders_brainco_based(cfg: DictConfig):
     data_cfg = cfg.data
 
@@ -390,6 +538,7 @@ def get_dataloaders_brainco_based(cfg: DictConfig):
     if train_datasets:
         train_dset = data.ConcatDataset(train_datasets)
         val_dset = data.ConcatDataset(val_datasets) if val_datasets else None
+        stats_sources = train_datasets
 
         if np.sum(object_class_sizes) > 0:
             ratios = np.array(object_class_sizes) / np.sum(object_class_sizes)
@@ -405,12 +554,22 @@ def get_dataloaders_brainco_based(cfg: DictConfig):
             dataset,
             [train_dset_size, len(dataset) - train_dset_size],
         )
+        stats_sources = [dataset]
 
     # BrainCo tactile values are already scaled by fixed per-channel maxima in
     # the dataset. Keep encoder normalization as identity instead of applying
     # an additional train-set mean/std z-score.
-    mean = [0.0] * 4
-    std = [1.0] * 4
+    #
+    # standardize_channels overrides that: the fixed maxima were tuned for the
+    # older 60 Hz teleop dump, and on other recordings they leave proximity two
+    # orders of magnitude above the force channels. A train-set z-score puts all
+    # four channels in the same range the pretrained sensor_embed expects.
+    if bool(data_cfg.get("standardize_channels", False)):
+        mean, std = _compute_brainco_channel_stats(stats_sources)
+        logger.info(f"BrainCo channel z-score: mean={mean}, std={std}")
+    else:
+        mean = [0.0] * 4
+        std = [1.0] * 4
     if cfg.data.get("normalization"):
         with open_dict(cfg):
             cfg.data.normalization.mean = mean
@@ -421,6 +580,15 @@ def get_dataloaders_brainco_based(cfg: DictConfig):
     if val_dset is not None:
         val_dset.sensor_mean = mean
         val_dset.sensor_std = std
+
+    if bool(data_cfg.get("standardize_pos", False)):
+        pos_mean, pos_std = _compute_pos_stats(ds.fingertip_rel for ds in stats_sources)
+        logger.info(f"BrainCo pos z-score: mean={pos_mean}, std={pos_std}")
+        train_dset.pos_mean = pos_mean
+        train_dset.pos_std = pos_std
+        if val_dset is not None:
+            val_dset.pos_mean = pos_mean
+            val_dset.pos_std = pos_std
 
     return train_dset, val_dset
 
@@ -514,7 +682,13 @@ def get_dataloaders(cfg: DictConfig):
         loader_args["sampler"] = train_sampler
 
     train_dataloader = data.DataLoader(train_dset, **loader_args)
-    val_dataloader = data.DataLoader(val_dset, **dict(cfg.data.val_dataloader))
+    # A config may route every episode into training and leave no val split.
+    # Trainer.val_loop already no-ops on a None loader.
+    if val_dset is None:
+        logger.info("No validation split: every episode is used for training.")
+        val_dataloader = None
+    else:
+        val_dataloader = data.DataLoader(val_dset, **dict(cfg.data.val_dataloader))
     return train_dataloader, val_dataloader, sensor_means, sensor_stds
 
 
@@ -571,6 +745,14 @@ def train(cfg: DictConfig):
 
     logger.info(f"Instantiating algorithm <{cfg.algorithm._target_}>")
     algorithm = hydra.utils.instantiate(cfg.algorithm)
+
+    # Weight-only init runs before update_stats so this run's own dataset stats
+    # stay authoritative even if the checkpoint format ever changes.
+    if cfg.get("init_from_ckpt") and not resume_state:
+        load_pretrained_weights(algorithm, cfg.init_from_ckpt, cfg.get("init_skip_keys"))
+    elif cfg.get("init_from_ckpt"):
+        logger.info("Resuming an existing run: ignoring init_from_ckpt")
+
     _maybe_update_encoder_stats(algorithm, sensor_means, sensor_stds, pos_mean, pos_std)
 
     trainer.fit(algorithm, train_dataloader, val_dataloader, ckpt_path=cfg.ckpt_path)

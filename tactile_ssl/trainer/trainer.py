@@ -39,6 +39,7 @@ class Trainer:
         use_distributed_sampler: bool = True,
         save_checkpoint_dir: str = "./checkpoints",
         checkpoint_frequency: int = 1,
+        latest_checkpoint_frequency: int = 1,
         log_frequency: int = 1,
         checkpoint_interval_type: Literal["linear", "log"] = "linear",
         max_task_checkpoints: Optional[int] = None,
@@ -140,6 +141,7 @@ class Trainer:
 
         self.checkpoint_dir = save_checkpoint_dir
         self.checkpoint_frequency = checkpoint_frequency
+        self.latest_checkpoint_frequency = max(1, int(latest_checkpoint_frequency))
         self.log_frequency = log_frequency
         self.save_probe_weights_only = save_probe_weights_only
         self.max_task_checkpoints = max_task_checkpoints
@@ -246,7 +248,13 @@ class Trainer:
             if self.max_epochs is not None and self.current_epoch >= self.max_epochs:
                 self.should_stop = True
 
-            self.save_latest_checkpoint()
+            # last.ckpt is a 262 MB write. At one epoch per two optimizer steps
+            # -- which the data-scaling runs need to hit a shared step budget on
+            # a small subset -- writing it every epoch makes the run disk-bound
+            # and idles the GPU. Default 1 keeps the original behaviour.
+            if (self.current_epoch % self.latest_checkpoint_frequency == 0
+                    or self.should_stop):
+                self.save_latest_checkpoint()
 
             if self.should_save:
                 self.save_checkpoint()

@@ -1,0 +1,36 @@
+# @package _global_
+
+# dinov2_all_rope on slip_data_v3 instead of slip_data_v2.
+#
+# The single-frame (W=1) downstream stack -- angle_tiny at depth 8, no temporal
+# former -- matched to the frame_w1_* pretraining line. dinov2_all_rope itself
+# still points at v2; this file moves it to v3 so these results sit alongside
+# the temporal-family v3 numbers rather than the older v2 ones.
+#
+# The v3 settings are restated here rather than inherited because
+# temporal_w15_cls_d4_fe4_v3 also carries the temporal encoder, which this stack
+# must not have. Keep the two in sync if the v3 class list ever changes.
+#
+# Folds are stratified by episode index within class (fold_by_episode_index) and
+# num_folds must be 3: v3 has exactly 3 episodes per class, so fold k validates
+# episode k of all six classes.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/dinov2_all_rope
+  - _self_
+
+experiment_name: brainco_xyz_slip_detection_all_rope_v3
+
+wandb:
+  group: all_rope_v3_slip
+  tags: ["brainco", "xyz", "slip_detection", "all", "rope", "w1", "slip_data_v3"]
+
+fold_by_episode_index: true
+
+data:
+  dataset:
+    data_path: ${paths.data_root}/brainco/downstream/slip_data_v3
+    config:
+      classes: [slip_box, slip_box2, slip_case, slip_case2, slip_doll, slip_plastic]
+      input_window_frames: 15
+      input_window_stride: 15

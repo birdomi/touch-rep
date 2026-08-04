@@ -34,7 +34,7 @@ data:
   val_data_budget: 1.0
 
 task:
-  _target_: tactile_ssl.downstream_task.ResNet18SlipModule
+  _target_: tactile_ssl.downstream_task.ResNet18VisionWindowModule
 
   pretrained: true
   freeze_backbone: false

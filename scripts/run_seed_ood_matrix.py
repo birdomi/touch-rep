@@ -64,6 +64,10 @@ SINGLE_RE = {
     for tag, label in [("last", "Last"), ("best", "Best"), ("epoch_avg", "EpochAvg")]
 }
 
+# Extra Hydra overrides appended to every job's command line. Wrapper scripts
+# set this; it stays empty for a plain run.
+EXTRA_OVERRIDES: list = []
+
 FIELDS = [
     "protocol", "task", "encoder", "seed", "held_out", "status",
     "last_balacc", "last_f1", "last_f1macro",
@@ -135,6 +139,9 @@ def run_job(job, gpu, log_dir, args):
         cmd += ood_overrides(task, held_out) + ["all_split=false"]
     else:
         cmd += ["--all_split", "--num_folds", str(args.num_folds)]
+    # Wrapper scripts append Hydra overrides here (e.g. batch size) without
+    # having to reimplement this command.
+    cmd += EXTRA_OVERRIDES
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu), "XFORMERS_DISABLED": "TRUE"}
     t0 = time.time()
     with log_path.open("w") as fh:

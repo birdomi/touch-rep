@@ -1,0 +1,16 @@
+defaults:
+  - /experiment/brainco/ours_3d/task/slip_detection/temporal_w15_cls_d4_fe4_v3
+  - _self_
+
+experiment_name: xyznorm_slip_temporal_w15_cls_d4_fe4
+
+wandb:
+  group: xyznorm_slip
+  tags: ["brainco", "xyz", "slip_detection", "temporal_former", "w15", "cls",
+         "former_d4", "frame_d4", "xyznorm"]
+
+data:
+  standardize_pos: false
+  dataset:
+    config:
+      align_xyz_to_npz: false

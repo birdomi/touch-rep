@@ -106,6 +106,7 @@ class AngleTransformer(SignalTransformer):
         causal: bool = False,
         pre_fusion_depth: Optional[int] = None,
         normalization: Optional[DictConfig] = None,
+        pos_normalization: Optional[DictConfig] = None,
         fine_tune_sensor: bool = False,
         fine_tune_sensor_shallow_blocks: Optional[int] = 0,
         rope_hand_offset: int = 100,
@@ -242,6 +243,21 @@ class AngleTransformer(SignalTransformer):
             s = torch.ones(in_chans)
         self.register_buffer("signal_mean", m)  # (in_chans,)
         self.register_buffer("signal_std",  s)  # (in_chans,)
+
+        # Position stream. Identity unless the dataloader supplies stats, so a
+        # config that does not ask for pos standardization behaves exactly as
+        # before. HOI and BrainCo fingertip frames only line up once HOI is
+        # converted to BrainCo's convention (pseudo_force_tactile.
+        # align_xyz_to_brainco); this z-score then removes the residual
+        # per-axis offset and scale between the two corpora.
+        if pos_normalization is not None:
+            pm = torch.tensor(pos_normalization.mean, dtype=torch.float32)
+            ps = torch.tensor(pos_normalization.std,  dtype=torch.float32)
+        else:
+            pm = torch.zeros(pos_in_chans)
+            ps = torch.ones(pos_in_chans)
+        self.register_buffer("pos_mean", pm)  # (pos_in_chans,)
+        self.register_buffer("pos_std",  ps)  # (pos_in_chans,)
 
 
         self.init_weights()
@@ -456,7 +472,12 @@ class AngleTransformer(SignalTransformer):
         return x + self.sensor_time_embed
 
     def pre_pos_embed(self, pos: torch.Tensor) -> torch.Tensor:
-        """PatchEmbed1d for angle stream (no normalization).
+        """Z-score the position stream, then embed.
+
+        The buffers default to mean 0 / std 1, so this is a no-op unless the
+        dataloader supplied per-axis statistics. RoPE is unaffected either way:
+        `_rope_positions` builds its coordinates from finger indices, never from
+        these values.
 
         Args:
             pos : (B, T, N_fingers, pos_in_chans)
@@ -470,6 +491,7 @@ class AngleTransformer(SignalTransformer):
                 f"Expected angle input (B,T,{self.pos_in_dim},{self.pos_in_chans}), "
                 f"got {tuple(pos.shape)}"
             )
+        pos = (pos - self.pos_mean) / self.pos_std
         return _apply_embed1d(pos, self.angle_embed, pos.shape[0])
 
     def _maybe_print_rope_debug(
@@ -761,10 +783,17 @@ class AngleTransformer(SignalTransformer):
         self,
         signal_mean: torch.Tensor,
         signal_std: torch.Tensor,
-        **_kwargs,  # ignore pos_mean/pos_std — angles are not normalized
+        pos_mean: Optional[torch.Tensor] = None,
+        pos_std: Optional[torch.Tensor] = None,
+        **_kwargs,
     ):
         self.signal_mean = signal_mean
         self.signal_std  = signal_std
+        # Left untouched when the caller has no position statistics, so the
+        # buffers keep whatever the checkpoint or the identity default holds.
+        if pos_mean is not None and pos_std is not None:
+            self.pos_mean = pos_mean.to(self.pos_mean.device, self.pos_mean.dtype)
+            self.pos_std  = pos_std.to(self.pos_std.device, self.pos_std.dtype)
 
 
 # ── factory functions ─────────────────────────────────────────────────────────

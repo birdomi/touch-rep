@@ -1,0 +1,72 @@
+# @package _global_
+
+# Single-frame 4D-RoPE encoder, all 42 skeleton joints, lr 4e-4.
+#
+# The 42-joint counterpart of frame_w1_tip_lr4e4; the two differ only in sensor
+# extent, mirroring the tip-vs-42j axis in the temporal family.
+#
+# Self-contained: no parent experiment config. Composed output is identical
+# to the pre-flattening chain (verified key by key).
+
+defaults:
+  - override /data: oakinkv2_arctic_taco_hot3d
+  - override /algorithm: angle_dinov2
+  - _self_
+
+wandb:
+  project: dinov2
+  tags:
+  - all
+  - pseudo_force
+  - ${model_size}
+  - rope
+  - v2
+  - hp1
+  - ibotfix
+  - 42joint
+  - stride1
+  - b2048
+  - proximity_only
+  - w1
+  - depth8
+  - lr4e-4
+  - ep500
+  group: dino_all_pseudo_force_${model_size}_rope_v2_hp1_ibotfix_42j_s1_b2048_prox_lr4e4_ep500
+data:
+  train_dataloader:
+    batch_size: 2048
+  sensor: all_pseudo_force
+  oakinkv2_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/oakinkv2
+  arctic_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/arctic
+  taco_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/taco
+  hot3d_data_root: ./pretraining_dataset/pseudo_force_dataset_v2/hot3d
+  sensor_channels:
+  - proximity
+algorithm:
+  ibot_mask_ratio:
+  - 0.3
+  - 0.7
+  encoder:
+    pos_in_chans: 3
+    pos_embed_fn: rope
+    drop_path_rate: 0.0
+    rope_hand_offset: 10
+    debug_rope: true
+    sensor_time_chunk_size: 1
+    pre_fusion_depth: 1
+    depth: 8
+  dino_head:
+    out_dim: 4096
+  optim_cfg:
+    lr: 0.0004
+  lr_scheduler_cfg:
+    warmup_epochs: 10
+  centering: centering
+  sensor_input_key: joint_force
+  pos_input_key: finger_xyz
+model_size: tiny
+ckpt_path: ./
+experiment_name: dinov2_all_pseudo_force_${model_size}_rope_v2_hp1_ibotfix_42j_s1_b2048_prox_lr4e4_ep500
+trainer:
+  max_epochs: 500
+  validation_frequency: 50

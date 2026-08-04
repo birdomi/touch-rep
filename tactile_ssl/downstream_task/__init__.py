@@ -20,4 +20,4 @@ from .brainco_grasp_vision_sl import ResNet18GraspModule
 
 from .act_module import ACTModule
 
-from .brainco_slip_vision_sl import ResNet18SlipModule
+from .brainco_vision_window_sl import ResNet18VisionWindowModule

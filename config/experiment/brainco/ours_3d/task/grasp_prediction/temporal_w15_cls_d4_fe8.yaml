@@ -1,0 +1,29 @@
+# @package _global_
+
+# Grasp-prediction counterpart of slip_detection/temporal_w15_cls_d4_fe8:
+# temporal_w15_cls_d4_fe4 with the frame encoder at depth 8, matching the
+# dinov2_temporal_*_cls_d4_fe8_* pretraining line.
+#
+# depth MUST match the checkpoint -- load_encoder uses strict=False after
+# filtering by name and shape, so a depth-8 checkpoint against a depth-4
+# downstream would load only its first 4 fusion blocks and leave the rest random,
+# silently.
+#
+# Everything else is inherited: former depth 4, CLS-frames former input, CLS
+# readout, 42-joint pose layout, 15-frame window.
+
+defaults:
+  - /experiment/brainco/ours_3d/task/grasp_prediction/temporal_w15_cls_d4_fe4
+  - _self_
+
+experiment_name: brainco_xyz_grasp_prediction_temporal_w15_cls_d4_fe8
+
+wandb:
+  group: temporal_w15_cls_d4_fe8_grasp
+  tags: ["brainco", "xyz", "grasp_prediction", "temporal_former", "w15", "cls",
+         "former_d4", "frame_d8"]
+
+task:
+  model_encoder:
+    frame_encoder:
+      depth: 8

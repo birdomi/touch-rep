@@ -1,0 +1,56 @@
+train_dataloader:
+  batch_size: 64
+  num_workers: 8
+  shuffle: true
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: false
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+
+sensor: brainco_slip_detection_vision
+class_names:
+  0: non-slip
+  1: slip
+train_data_budget: 1.0
+val_data_budget: 1.0
+balanced_sampling: true
+
+augment_train: true
+img_size: 224
+crop_mode: resize
+crop_size: 320
+# The window holds 15 frames but only 3 images reach the network.
+num_frames_per_sample: 3
+
+dataset:
+  _target_: tactile_ssl.data.brainco_slip_vision_dataset.BraincoSlipVisionDataset
+  config:
+    camera_key: color_0
+    crop_mode: ${data.crop_mode}
+    crop_size: ${data.crop_size}
+    augment_pad: 16
+    augment_jitter: 0.2
+    # 15-frame (250 ms at 60 fps) windows, matching the tactile w15 protocol.
+    input_window_frames: 15
+    input_window_stride: 15
+    # 1-indexed picks inside the window: first, 5th and last frame.
+    frame_positions: [1, 5, 15]
+    # A window is labelled by its LAST frame, so a 15-frame window ending just
+    # after slip onset counts as slip even though most of its frames are not.
+    # Same convention as the tactile w15 runs; not comparable to 3-frame numbers.
+    exclude_before_slip_start_frames: 0
+    exclude_after_slip_end_frames: 0
+    # v3 is a separate collection from v2: 6 classes x 3 long episodes.
+    classes: [slip_box, slip_box2, slip_case, slip_case2, slip_doll, slip_plastic]
+  data_path: ${paths.data_root}/brainco/downstream/slip_data_v3
+  num_frames_per_sample: ${data.num_frames_per_sample}
+  img_size: ${data.img_size}
+
+val_dataset: null

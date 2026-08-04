@@ -21,6 +21,33 @@ class BraincoAngleGraspSLModule(BraincoGraspDetectionSLModule):
         label          : (B,)  long
     """
 
+    def __init__(self, *args, pos_normalization: Optional[Any] = None, **kwargs):
+        """``pos_normalization``: {mean: [...], std: [...]} over the pose channels.
+
+        The pose stream is otherwise fed raw, and for BrainCo that means metres of
+        wrist-local fingertip XYZ: std 0.056 overall and 0.009 on the weakest
+        channel. A randomly initialised encoder gets almost no per-sample
+        variation from an input that small and sits at ln(2) forever -- measured
+        directly: the same model reaches train accuracy 1.0 on std-1.0 input and
+        0.64 (loss stuck at 0.6931) on std-0.03 input, same steps and lr.
+
+        Off by default. Every checkpoint pretrained before this existed learned on
+        the raw pose scale, so switching it on changes the input distribution
+        those weights expect -- only enable it for arms trained under the same
+        setting.
+        """
+        super().__init__(*args, **kwargs)
+        if pos_normalization is None:
+            self.pos_norm = None
+        else:
+            mean = torch.tensor(list(pos_normalization["mean"]), dtype=torch.float32)
+            std = torch.tensor(list(pos_normalization["std"]), dtype=torch.float32)
+            if (std <= 0).any():
+                raise ValueError(f"pos_normalization std must be positive, got {std}")
+            self.register_buffer("pos_norm_mean", mean, persistent=False)
+            self.register_buffer("pos_norm_std", std, persistent=False)
+            self.pos_norm = True
+
     def encode(self, joint_contact: torch.Tensor, position_input: torch.Tensor,
                mask=None) -> torch.Tensor:
         """Encode windowed contact and angle/XYZ data through AngleTransformer.
@@ -106,6 +133,10 @@ class BraincoAngleGraspSLModule(BraincoGraspDetectionSLModule):
             position_input = batch["finger_xyz"]
         else:
             position_input = batch["finger_angles"]
+        if self.pos_norm is not None:
+            position_input = (
+                position_input - self.pos_norm_mean.to(position_input.device)
+            ) / self.pos_norm_std.to(position_input.device)
         mask          = batch.get("mask", None)
 
         embeddings = self.encode(joint_contact, position_input, mask)   # (B, W, D)
